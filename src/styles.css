@@ -9,6 +9,8 @@
   --crema-suave: #F3E7D2;
   --salsa: #6B8E4E;
   --alerta: #A8322D;
+  --texto-principal: #201A15;
+  --texto-sobre-oscuro: #FBF3E6;
   --font-display: 'Baloo 2', system-ui, sans-serif;
   --font-body: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -20,7 +22,7 @@ body {
   margin: 0;
   font-family: var(--font-body);
   background: var(--crema);
-  color: var(--carbon);
+  color: var(--texto-principal);
 }
 
 input, button, textarea {

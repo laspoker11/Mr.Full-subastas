@@ -1,9 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../supabaseClient";
 import AuctionCard from "../components/AuctionCard";
+import { useSiteSettings } from "../lib/siteSettings";
 import { Flame } from "lucide-react";
 
 export default function Cliente() {
+  const { cover_image_url } = useSiteSettings();
   const [auctions, setAuctions] = useState([]);
   const [topAmounts, setTopAmounts] = useState({});
   const [loading, setLoading] = useState(true);
@@ -48,6 +50,12 @@ export default function Cliente() {
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 14px 60px" }}>
+      {cover_image_url && (
+        <img
+          src={cover_image_url} alt="MrFull"
+          style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 16, marginBottom: 18 }}
+        />
+      )}
       {loading ? (
         <div style={{ textAlign: "center", padding: 60, opacity: 0.6 }}>Cargando subastas...</div>
       ) : live.length === 0 ? (

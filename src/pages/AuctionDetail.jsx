@@ -4,6 +4,7 @@ import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import Countdown, { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney, quickIncrements } from "../components/AuctionCard";
+import { waLink, waWinnerMessage, waGeneralMessage } from "../lib/whatsapp";
 import { Flame, Clock, Trophy, ShieldCheck, Users } from "lucide-react";
 
 export default function AuctionDetail() {
@@ -57,12 +58,13 @@ export default function AuctionDetail() {
   const increments = quickIncrements(auction.start_price);
   const minIncrement = increments[0];
   const min = topBid ? topBid.amount + minIncrement : auction.start_price;
-  const isWinner = auction.status === "confirming" && auction.winner_user_id === user?.id;
+  const isWinner = (auction.status === "confirming" || auction.status === "closed") && auction.winner_user_id === user?.id;
 
   async function placeBid(amt) {
     setError(""); setOk("");
     if (!user) return setError("Inicia sesión para poder pujar.");
     if (!amt || amt < min) return setError(`Tu puja debe ser de al menos ${fmtMoney(min)}.`);
+    if (auction.max_price && amt > auction.max_price) return setError(`Esta subasta tiene un tope máximo de ${fmtMoney(auction.max_price)}.`);
     setBusy(true);
     const { error } = await supabase.rpc("place_bid", { p_auction_id: id, p_amount: amt });
     setBusy(false);
@@ -123,11 +125,12 @@ export default function AuctionDetail() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--queso)", fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}>
               <Clock size={14} /> Cierra en <Countdown endsAt={auction.ends_at} />
             </div>
-            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 38, color: "var(--crema)", marginTop: 6 }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 38, color: "var(--texto-sobre-oscuro)", marginTop: 6 }}>
               {topBid ? fmtMoney(topBid.amount) : fmtMoney(auction.start_price)}
             </div>
-            <div style={{ fontSize: 13, color: "var(--crema)", opacity: 0.7 }}>
+            <div style={{ fontSize: 13, color: "var(--texto-sobre-oscuro)", opacity: 0.7 }}>
               {topBid ? `Puja más alta — ${profilesById[topBid.user_id] || "..."}` : "Precio inicial · ¡sé el primero en pujar!"}
+              {auction.max_price ? ` · Tope máximo: ${fmtMoney(auction.max_price)}` : ""}
             </div>
           </>
         )}
@@ -139,10 +142,10 @@ export default function AuctionDetail() {
         {(auction.status === "confirming" || auction.status === "closed") && (
           <div>
             <Trophy size={24} color="var(--queso)" />
-            <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "var(--crema)", marginTop: 6 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "var(--texto-sobre-oscuro)", marginTop: 6 }}>
               {profilesById[auction.winner_user_id] || "Ganador"} — {fmtMoney(topBid?.amount ?? auction.start_price)}
             </div>
-            <div style={{ fontSize: 12.5, color: "var(--crema)", opacity: 0.7, marginTop: 4 }}>
+            <div style={{ fontSize: 12.5, color: "var(--texto-sobre-oscuro)", opacity: 0.7, marginTop: 4 }}>
               {auction.status === "confirming"
                 ? auction.winner_confirmed ? "Cupo confirmado, esperando cierre de MrFull" : "Esperando que el ganador confirme su cupo"
                 : "Subasta cerrada"}
@@ -151,12 +154,27 @@ export default function AuctionDetail() {
         )}
       </div>
 
-      {isWinner && !auction.winner_confirmed && (
+      {isWinner && (
         <div className="card" style={{ marginTop: 14, background: "var(--queso-claro)" }}>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, marginBottom: 8 }}>
             🎉 ¡Ganaste esta subasta!
           </div>
-          <button className="btn-primary" onClick={confirmWin} disabled={busy}>Confirmar mi cupo</button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {!auction.winner_confirmed && (
+              <button className="btn-primary" onClick={confirmWin} disabled={busy}>Confirmar mi cupo</button>
+            )}
+            <a
+              href={waLink(waWinnerMessage({ title: auction.title, amount: topBid ? topBid.amount : auction.start_price, fullName: profile?.full_name || "" }))}
+              target="_blank" rel="noopener noreferrer"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                background: "#25D366", color: "white", borderRadius: 10, padding: "11px 16px",
+                fontWeight: 700, fontSize: 14, textDecoration: "none",
+              }}
+            >
+              💬 Escribir por WhatsApp para reclamar mi premio
+            </a>
+          </div>
         </div>
       )}
 
@@ -170,17 +188,22 @@ export default function AuctionDetail() {
           ) : (
             <>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                {increments.map((step) => (
-                  <button
-                    key={step}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => quickBid(step)}
-                    style={{ ...{}, flex: 1, background: "var(--salsa)", color: "white", border: "none", borderRadius: 10, padding: "10px 8px", fontWeight: 700, fontSize: 14, cursor: "pointer" }}
-                  >
-                    +{fmtMoney(step).replace("$", "")}
-                  </button>
-                ))}
+                {increments.map((step) => {
+                  const resultingAmount = (topBid ? topBid.amount : auction.start_price) + step;
+                  const exceedsMax = auction.max_price && resultingAmount > auction.max_price;
+                  return (
+                    <button
+                      key={step}
+                      type="button"
+                      disabled={busy || exceedsMax}
+                      onClick={() => quickBid(step)}
+                      title={exceedsMax ? `Superaría el tope máximo de ${fmtMoney(auction.max_price)}` : undefined}
+                      style={{ flex: 1, background: exceedsMax ? "#ccc" : "var(--salsa)", color: "white", border: "none", borderRadius: 10, padding: "10px 8px", fontWeight: 700, fontSize: 14, cursor: exceedsMax ? "not-allowed" : "pointer" }}
+                    >
+                      +{fmtMoney(step).replace("$", "")}
+                    </button>
+                  );
+                })}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <input className="input" type="number" placeholder={`O escribe un monto (mín. ${fmtMoney(min)})`} value={amount} onChange={(e) => setAmount(e.target.value)} />
@@ -218,7 +241,7 @@ export default function AuctionDetail() {
         </div>
       )}
 
-      <div style={{ background: "var(--carbon-suave)", borderRadius: 14, padding: 14, color: "var(--crema)", marginTop: 16 }}>
+      <div style={{ background: "var(--carbon-suave)", borderRadius: 14, padding: 14, color: "var(--texto-sobre-oscuro)", marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 13, marginBottom: 6, color: "var(--queso)" }}>
           <ShieldCheck size={15} /> Reglas de la subasta
         </div>

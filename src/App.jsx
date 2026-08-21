@@ -1,9 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
+import { SiteSettingsProvider } from "./lib/siteSettings";
 import NavBar from "./components/NavBar";
+import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Cliente from "./pages/Cliente";
+import Ranking from "./pages/Ranking";
 import AuctionDetail from "./pages/AuctionDetail";
 import Admin from "./pages/Admin";
 
@@ -22,20 +25,24 @@ function Shell() {
         <Route path="/login" element={<Login />} />
         <Route path="/registro" element={<Register />} />
         <Route path="/" element={<Cliente />} />
+        <Route path="/ranking" element={<Ranking />} />
         <Route path="/subasta/:id" element={<AuctionDetail />} />
         <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <WhatsAppFloatingButton />
     </>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Shell />
-      </BrowserRouter>
-    </AuthProvider>
+    <SiteSettingsProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <Shell />
+        </BrowserRouter>
+      </AuthProvider>
+    </SiteSettingsProvider>
   );
 }

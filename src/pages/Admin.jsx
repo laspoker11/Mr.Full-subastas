@@ -3,7 +3,9 @@ import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney } from "../components/AuctionCard";
-import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3 } from "lucide-react";
+import { THEMES, applyTheme } from "../lib/themes";
+import { useSiteSettings } from "../lib/siteSettings";
+import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon } from "lucide-react";
 
 export default function Admin() {
   const { isAdmin, loading } = useAuth();
@@ -24,22 +26,23 @@ export default function Admin() {
 }
 
 function AdminDashboard() {
+  const [tab, setTab] = useState("subastas");
   const [auctions, setAuctions] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [bidsByAuction, setBidsByAuction] = useState({});
   const [profilesById, setProfilesById] = useState({});
   const [form, setForm] = useState({
-    title: "", description: "", imageUrl: "", startPrice: 25000, durationMin: 15, confirmWindowMin: 15,
+    title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationMin: 15, confirmWindowMin: 15,
     startMode: "now", // "now" | "scheduled"
     startAt: "", // datetime-local string
     saveAsTemplate: false,
-    repeatCount: 1, repeatEveryHours: 24,
+    repeatAfterClose: 0,
   });
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: a } = await supabase.from("auctions").select("*").neq("status", "void").order("starts_at", { ascending: true }).limit(60);
+    const { data: a } = await supabase.from("auctions").select("*").order("starts_at", { ascending: true }).limit(80);
     setAuctions(a || []);
     const { data: t } = await supabase.from("auction_templates").select("*").order("created_at", { ascending: false });
     setTemplates(t || []);
@@ -50,7 +53,7 @@ function AdminDashboard() {
       byAuction[bid.auction_id].push(bid);
     });
     setBidsByAuction(byAuction);
-    const userIds = [...new Set((b || []).map((x) => x.user_id))];
+    const userIds = [...new Set([...(b || []).map((x) => x.user_id), ...(a || []).filter((x) => x.cancelled_by).map((x) => x.cancelled_by)])];
     if (userIds.length) {
       const { data: profs } = await supabase.from("profiles").select("id, full_name").in("id", userIds);
       const { data: contacts } = await supabase.from("contact_info").select("id, phone").in("id", userIds);
@@ -75,7 +78,7 @@ function AdminDashboard() {
   function useTemplate(t) {
     setForm((f) => ({
       ...f, title: t.title, description: t.description, imageUrl: t.image_url,
-      startPrice: t.start_price, durationMin: t.duration_min, confirmWindowMin: t.confirm_window_min,
+      startPrice: t.start_price, maxPrice: t.max_price ?? "", durationMin: t.duration_min, confirmWindowMin: t.confirm_window_min,
     }));
   }
 
@@ -92,8 +95,9 @@ function AdminDashboard() {
     if (!form.startPrice || form.startPrice <= 0) return setFormError("El precio inicial debe ser mayor a 0.");
     if (!form.durationMin || form.durationMin <= 0) return setFormError("La duración debe ser mayor a 0 minutos.");
     if (form.startMode === "scheduled" && !form.startAt) return setFormError("Elige la fecha y hora de inicio.");
-    if (Number(form.repeatCount) > 1 && form.startMode !== "scheduled") {
-      return setFormError("Para repetir varias veces, primero elige una fecha/hora de inicio.");
+    const maxPriceValue = form.maxPrice === "" ? null : Number(form.maxPrice);
+    if (maxPriceValue !== null && maxPriceValue < Number(form.startPrice)) {
+      return setFormError("El precio máximo no puede ser menor al precio inicial.");
     }
 
     const startsAtISO = form.startMode === "scheduled" ? new Date(form.startAt).toISOString() : new Date().toISOString();
@@ -104,29 +108,21 @@ function AdminDashboard() {
       await supabase.rpc("save_template", {
         p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
         p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+        p_max_price: maxPriceValue,
       });
     }
 
-    let error;
-    if (Number(form.repeatCount) > 1) {
-      ({ error } = await supabase.rpc("schedule_recurring_auctions", {
-        p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-        p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
-        p_first_start: startsAtISO, p_repeat_count: Number(form.repeatCount), p_interval_hours: Number(form.repeatEveryHours) || 24,
-      }));
-    } else {
-      ({ error } = await supabase.rpc("create_auction", {
-        p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-        p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
-        p_starts_at: startsAtISO,
-      }));
-    }
+    const { error } = await supabase.rpc("create_auction", {
+      p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
+      p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+      p_starts_at: startsAtISO, p_max_price: maxPriceValue, p_repeat_remaining: Number(form.repeatAfterClose) || 0,
+    });
 
     setSaving(false);
     if (error) return setFormError("Error al publicar: " + error.message);
     setForm({
-      title: "", description: "", imageUrl: "", startPrice: 25000, durationMin: 15, confirmWindowMin: 15,
-      startMode: "now", startAt: "", saveAsTemplate: false, repeatCount: 1, repeatEveryHours: 24,
+      title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationMin: 15, confirmWindowMin: 15,
+      startMode: "now", startAt: "", saveAsTemplate: false, repeatAfterClose: 0,
     });
     load();
   }
@@ -135,13 +131,31 @@ function AdminDashboard() {
   const runningAuctions = auctions.filter((a) => (a.status === "live" && new Date(a.starts_at).getTime() <= now) || a.status === "confirming");
   const scheduledAuctions = auctions.filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now);
   const closedAuctions = auctions.filter((a) => a.status === "closed");
+  const cancelledAuctions = auctions.filter((a) => a.status === "void");
 
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 14px 60px", display: "flex", flexDirection: "column", gap: 20 }}>
-      <button onClick={load} className="btn-ghost" style={{ alignSelf: "flex-end", display: "flex", alignItems: "center", gap: 5 }}>
-        <RefreshCw size={13} /> Actualizar
-      </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, background: "var(--crema-suave)", padding: 4, borderRadius: 10 }}>
+          {[["subastas", "Subastas"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)} style={{
+              padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+              fontWeight: 700, fontSize: 13, background: tab === id ? "var(--ladrillo)" : "transparent",
+              color: tab === id ? "white" : "var(--carbon)",
+            }}>{label}</button>
+          ))}
+        </div>
+        <button onClick={load} className="btn-ghost" style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <RefreshCw size={13} /> Actualizar
+        </button>
+      </div>
 
+      {tab === "usuarios" ? (
+        <AdminUsers />
+      ) : tab === "diseno" ? (
+        <AdminDesign />
+      ) : (
+      <>
       <div className="card">
         <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
           <Plus size={16} /> Publicar o programar subasta
@@ -171,6 +185,7 @@ function AdminDashboard() {
           <input className="input" placeholder="URL de la imagen (opcional)" value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} />
           <div style={{ display: "flex", gap: 8 }}>
             <LabeledInput label="Precio inicial" value={form.startPrice} onChange={(v) => setForm({ ...form, startPrice: v })} />
+            <LabeledInput label="Precio máximo (opcional)" value={form.maxPrice} onChange={(v) => setForm({ ...form, maxPrice: v })} />
             <LabeledInput label="Duración (min)" value={form.durationMin} onChange={(v) => setForm({ ...form, durationMin: v })} />
             <LabeledInput label="Confirmar (min)" value={form.confirmWindowMin} onChange={(v) => setForm({ ...form, confirmWindowMin: v })} />
           </div>
@@ -198,21 +213,22 @@ function AdminDashboard() {
                   <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>Fecha y hora de inicio</div>
                   <input className="input" type="datetime-local" value={form.startAt} onChange={(e) => setForm({ ...form, startAt: e.target.value })} />
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <LabeledInput label="Repetir X veces" value={form.repeatCount} onChange={(v) => setForm({ ...form, repeatCount: v })} />
-                  <LabeledInput label="Cada cuántas horas" value={form.repeatEveryHours} onChange={(v) => setForm({ ...form, repeatEveryHours: v })} />
-                </div>
-                {Number(form.repeatCount) > 1 && (
-                  <div style={{ fontSize: 11.5, opacity: 0.6 }}>
-                    Se crearán {form.repeatCount} subastas idénticas, cada una {form.repeatEveryHours} horas después de la anterior.
-                  </div>
-                )}
               </div>
             )}
+
+            <div style={{ borderTop: "1px solid var(--crema-suave)", marginTop: 6, paddingTop: 10 }}>
+              <LabeledInput label="Repetir automáticamente X veces después de cerrar" value={form.repeatAfterClose} onChange={(v) => setForm({ ...form, repeatAfterClose: v })} />
+              {Number(form.repeatAfterClose) > 0 && (
+                <div style={{ fontSize: 11.5, opacity: 0.6, marginTop: 4 }}>
+                  Apenas archives esta subasta, se va a crear sola la siguiente igualita (mismo producto, precio y duración) —
+                  esto va a pasar {form.repeatAfterClose} {Number(form.repeatAfterClose) === 1 ? "vez" : "veces"} más, sin que tengas que hacer nada.
+                </div>
+              )}
+            </div>
           </div>
 
           <button className="btn-primary" onClick={createAuction} disabled={saving} style={{ marginTop: 4 }}>
-            {saving ? "Publicando..." : Number(form.repeatCount) > 1 ? `Programar ${form.repeatCount} subastas` : form.startMode === "scheduled" ? "Programar subasta" : "Iniciar subasta"}
+            {saving ? "Publicando..." : form.startMode === "scheduled" ? "Programar subasta" : "Iniciar subasta"}
           </button>
           {formError && <div className="error-text" style={{ display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> {formError}</div>}
         </div>
@@ -254,7 +270,13 @@ function AdminDashboard() {
                 <button
                   className="btn-ghost"
                   style={{ color: "var(--alerta)" }}
-                  onClick={async () => { await supabase.rpc("cancel_auction", { p_auction_id: a.id }); load(); }}
+                  onClick={async () => {
+                    const reason = window.prompt("¿Por qué vas a cancelar esta subasta programada? (esto queda guardado)");
+                    if (reason === null) return;
+                    if (!reason.trim()) return alert("Escribe un motivo antes de continuar.");
+                    await supabase.rpc("cancel_auction", { p_auction_id: a.id, p_reason: reason.trim() });
+                    load();
+                  }}
                 >
                   Cancelar
                 </button>
@@ -276,7 +298,7 @@ function AdminDashboard() {
                 <div key={a.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                   <span>{a.title}</span>
                   <span style={{ opacity: 0.7 }}>
-                    {top ? `${profilesById[top.user_id]?.full_name || "..."} · ${fmtMoney(top.amount)}` : "Sin ganador"}
+                    {top ? `${profilesById[top.user_id]?.full_name || "..."} · ${profilesById[top.user_id]?.phone || ""} · ${fmtMoney(top.amount)}` : "Sin ganador"}
                   </span>
                 </div>
               );
@@ -286,6 +308,32 @@ function AdminDashboard() {
             Tip: agrupa los últimos ganadores en bloques de 5 y compárteles tu link de Calendly para agendar su visita.
           </div>
         </div>
+      )}
+
+      {cancelledAuctions.length > 0 && (
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, opacity: 0.7, display: "flex", alignItems: "center", gap: 6 }}>
+            <X size={15} color="var(--alerta)" /> Canceladas ({cancelledAuctions.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {cancelledAuctions.slice(0, 15).map((a) => (
+              <div key={a.id} className="card" style={{ padding: "10px 14px", fontSize: 12.5, borderColor: "var(--alerta)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 700 }}>{a.title}</span>
+                  <span style={{ opacity: 0.6 }}>
+                    {a.cancelled_at && new Date(a.cancelled_at).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                  </span>
+                </div>
+                <div style={{ opacity: 0.75, marginTop: 2 }}>
+                  Motivo: {a.cancel_reason || "(sin motivo especificado)"}
+                  {a.cancelled_by && ` — canceló ${profilesById[a.cancelled_by]?.full_name || "..."}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      </>
       )}
     </div>
   );
@@ -305,6 +353,13 @@ function AuctionAdminCard({ auction, bids, profilesById, onChanged }) {
     onChanged();
   }
 
+  function cancelWithReason(auctionId) {
+    const reason = window.prompt("¿Por qué vas a cancelar esta subasta? (esto queda guardado)");
+    if (reason === null) return; // le dio "Cancelar" al cuadro, no seguimos
+    if (!reason.trim()) return alert("Escribe un motivo antes de continuar.");
+    call("cancel_auction", { p_auction_id: auctionId, p_reason: reason.trim() });
+  }
+
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -316,8 +371,13 @@ function AuctionAdminCard({ auction, bids, profilesById, onChanged }) {
           }}>
             {auction.status === "live" ? (expired ? "Tiempo agotado" : "En vivo") : "Esperando confirmación"}
           </span>
+          {auction.repeat_remaining > 0 && (
+            <span className="pill" style={{ background: "var(--carbon-suave)", color: "var(--queso)", marginLeft: 6 }}>
+              🔁 repite {auction.repeat_remaining} {auction.repeat_remaining === 1 ? "vez" : "veces"} más
+            </span>
+          )}
         </div>
-        <button className="btn-ghost" style={{ color: "var(--alerta)" }} onClick={() => call("cancel_auction", { p_auction_id: auction.id })} disabled={busy}>
+        <button className="btn-ghost" style={{ color: "var(--alerta)" }} onClick={() => cancelWithReason(auction.id)} disabled={busy}>
           Cancelar
         </button>
       </div>
@@ -326,6 +386,7 @@ function AuctionAdminCard({ auction, bids, profilesById, onChanged }) {
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 13, opacity: 0.7 }}>
             Puja más alta: <b style={{ fontFamily: "var(--font-mono)" }}>{rank[0] ? fmtMoney(rank[0].amount) : fmtMoney(auction.start_price)}</b> ({rank.length} pujas activas)
+            {auction.max_price && <span> · Tope: <b style={{ fontFamily: "var(--font-mono)" }}>{fmtMoney(auction.max_price)}</b></span>}
           </div>
           <button className="btn-primary" style={{ marginTop: 8 }} disabled={!expired || busy} onClick={() => call("close_auction", { p_auction_id: auction.id })}>
             {expired ? "Cerrar subasta y anunciar ganador" : "Se cierra automáticamente al terminar el tiempo"}
@@ -389,6 +450,209 @@ function LabeledInput({ label, value, onChange }) {
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>{label}</div>
       <input className="input" type="number" value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function AdminUsers() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sortBy, setSortBy] = useState("points");
+  const [query, setQuery] = useState("");
+
+  const load = useCallback(async () => {
+    const { data: profs } = await supabase.from("profiles").select("*");
+    const { data: contacts } = await supabase.from("contact_info").select("*");
+    const phoneById = {};
+    (contacts || []).forEach((c) => (phoneById[c.id] = c.phone));
+    setUsers((profs || []).map((p) => ({ ...p, phone: phoneById[p.id] || "" })));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = users
+    .filter((u) => !query.trim() || u.full_name.toLowerCase().includes(query.toLowerCase()) || u.phone.includes(query))
+    .sort((a, b) => (b[sortBy] || 0) - (a[sortBy] || 0));
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>
+          Usuarios registrados ({users.length})
+        </div>
+        <button onClick={load} className="btn-ghost">Actualizar</button>
+      </div>
+
+      <input className="input" placeholder="Buscar por nombre o celular..." value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 10 }} />
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        {[["points", "Puntos"], ["auctions_won", "Ganadas"], ["auctions_participated", "Participaciones"], ["created_at", "Más recientes"]].map(([id, label]) => (
+          <button key={id} onClick={() => setSortBy(id)} style={{
+            padding: "5px 10px", borderRadius: 8, border: `1px solid ${sortBy === id ? "var(--ladrillo)" : "var(--crema-suave)"}`,
+            background: sortBy === id ? "var(--queso-claro)" : "white", fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 30, opacity: 0.6 }}>Cargando...</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {filtered.map((u, i) => (
+            <div key={u.id} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "10px 12px", borderRadius: 10, background: i === 0 && sortBy === "points" ? "var(--queso-claro)" : "var(--crema-suave)",
+            }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                  {i === 0 && sortBy === "points" && "🏆"} {u.full_name}
+                  {u.is_admin && <span className="pill" style={{ background: "var(--carbon)", color: "var(--queso)", fontSize: 9.5 }}>ADMIN</span>}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.6 }}>
+                  {u.phone} · Registrado el {new Date(u.created_at).toLocaleDateString("es-CO", { dateStyle: "medium" })}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", fontSize: 11.5 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>{u.points} pts</div>
+                <div style={{ opacity: 0.6 }}>{u.auctions_won} ganadas · {u.auctions_participated} participadas</div>
+              </div>
+            </div>
+          ))}
+          {filtered.length === 0 && <div style={{ textAlign: "center", padding: 20, opacity: 0.5, fontSize: 13 }}>Sin resultados</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminDesign() {
+  const { theme: activeTheme, logo_url, cover_image_url, refresh } = useSiteSettings();
+  const [selectedTheme, setSelectedTheme] = useState(activeTheme);
+  const [logoUrl, setLogoUrl] = useState(logo_url || "");
+  const [coverUrl, setCoverUrl] = useState(cover_image_url || "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+
+  async function uploadImage(file, kind) {
+    setUploadError("");
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return setUploadError("Ese archivo no es una imagen.");
+    if (file.size > 5 * 1024 * 1024) return setUploadError("La imagen no puede pesar más de 5 MB.");
+
+    const setUploading = kind === "logo" ? setUploadingLogo : setUploadingCover;
+    setUploading(true);
+
+    const ext = file.name.split(".").pop();
+    const path = `${kind}-${Date.now()}.${ext}`;
+
+    const { error } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
+    setUploading(false);
+    if (error) return setUploadError("No se pudo subir la imagen: " + error.message);
+
+    const { data } = supabase.storage.from("site-assets").getPublicUrl(path);
+    if (kind === "logo") setLogoUrl(data.publicUrl);
+    else setCoverUrl(data.publicUrl);
+  }
+
+  // Vista previa en vivo: aplica el tema elegido al instante, aunque no lo hayas guardado
+  useEffect(() => {
+    applyTheme(selectedTheme);
+    return () => applyTheme(activeTheme); // si sales sin guardar, vuelve al tema real
+  }, [selectedTheme, activeTheme]);
+
+  async function save() {
+    setSaving(true); setSaved(false);
+    const { error } = await supabase.rpc("update_site_settings", {
+      p_theme: selectedTheme, p_logo_url: logoUrl.trim(), p_cover_image_url: coverUrl.trim(),
+    });
+    setSaving(false);
+    if (error) return alert(error.message);
+    setSaved(true);
+    refresh();
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div className="card">
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+          Elige el estilo de tu app
+        </div>
+        <div style={{ fontSize: 12.5, opacity: 0.65, marginBottom: 14 }}>
+          Toca una tarjeta para probarla al instante (solo tú la ves así hasta que guardes).
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {Object.entries(THEMES).map(([key, t]) => (
+            <button
+              key={key}
+              onClick={() => setSelectedTheme(key)}
+              style={{
+                display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+                padding: 14, borderRadius: 14, cursor: "pointer",
+                border: selectedTheme === key ? "2px solid var(--ladrillo)" : "2px solid var(--crema-suave)",
+                background: "white",
+              }}
+            >
+              <div style={{ display: "flex", flexShrink: 0 }}>
+                {t.preview.map((c, i) => (
+                  <div key={i} style={{ width: 22, height: 40, background: c, marginLeft: i > 0 ? -6 : 0, borderRadius: 6, border: "2px solid white" }} />
+                ))}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                  {t.label}
+                  {selectedTheme === key && <Check size={14} color="var(--salsa)" />}
+                </div>
+                <div style={{ fontSize: 11.5, opacity: 0.65, marginTop: 2 }}>{t.description}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <ImageIcon size={16} /> Logo e imagen de portada
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div>
+            <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 6 }}>Logo (aparece arriba a la izquierda, junto al nombre)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {logoUrl && <img src={logoUrl} alt="Logo actual" style={{ width: 44, height: 44, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />}
+              <label className="btn-ghost" style={{ cursor: "pointer" }}>
+                {uploadingLogo ? "Subiendo..." : "Subir imagen"}
+                <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingLogo}
+                  onChange={(e) => uploadImage(e.target.files[0], "logo")} />
+              </label>
+            </div>
+            <input className="input" placeholder="...o pega un link directo a una imagen" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} style={{ marginTop: 8 }} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 6 }}>Imagen de portada (banner arriba de la lista de subastas)</div>
+            {coverUrl && <img src={coverUrl} alt="Portada actual" style={{ width: "100%", height: 100, borderRadius: 10, objectFit: "cover", marginBottom: 8 }} />}
+            <label className="btn-ghost" style={{ cursor: "pointer", display: "inline-block" }}>
+              {uploadingCover ? "Subiendo..." : "Subir imagen"}
+              <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingCover}
+                onChange={(e) => uploadImage(e.target.files[0], "cover")} />
+            </label>
+            <input className="input" placeholder="...o pega un link directo a una imagen" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} style={{ marginTop: 8 }} />
+          </div>
+
+          {uploadError && <div className="error-text">{uploadError}</div>}
+          <div style={{ fontSize: 11, opacity: 0.5 }}>
+            Máximo 5 MB por imagen. También puedes pegar un link si ya tienes la imagen alojada en otro lado (Facebook, Google Drive público, Imgur, etc).
+          </div>
+        </div>
+      </div>
+
+      <button className="btn-primary" onClick={save} disabled={saving}>
+        {saving ? "Guardando..." : "Guardar diseño para todos"}
+      </button>
+      {saved && <div className="success-text">✅ Diseño guardado — ya lo ven todos tus usuarios.</div>}
     </div>
   );
 }
