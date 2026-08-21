@@ -1,13 +1,1 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error(
-    "Faltan las variables VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY. " +
-    "Revisa tu archivo .env (en desarrollo) o las variables de entorno en Cloudflare Pages (en producción)."
-  );
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { createClient } from "@supabase/supabase-js"; const FALLBACK_SUPABASE_URL = "https://rxbnxusfxlqetfcayybz.supabase.co"; const FALLBACK_SUPABASE_ANON_KEY = "sb_publishable_oBqicY0WR_96JN78JU_miA_wryvJ3pv"; const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || FALLBACK_SUPABASE_URL; const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_SUPABASE_ANON_KEY; export const supabase = createClient(supabaseUrl, supabaseAnonKey);
