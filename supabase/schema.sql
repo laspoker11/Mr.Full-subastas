@@ -199,7 +199,7 @@ create function public.create_auction(
   p_title text, p_description text, p_image_url text,
   p_start_price integer, p_duration_min integer, p_confirm_window_min integer,
   p_starts_at timestamptz default now(), p_max_price integer default null,
-  p_repeat_remaining integer default 0
+  p_repeat_remaining integer default 0, p_category_id uuid default null
 ) returns uuid
 language plpgsql security definer set search_path = public as $$
 declare
@@ -214,9 +214,9 @@ begin
     raise exception 'El precio máximo no puede ser menor al precio inicial';
   end if;
 
-  insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining)
+  insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id)
   values (p_title, p_description, p_image_url, p_start_price, p_max_price, p_starts_at,
-          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0))
+          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0), p_category_id)
   returning id into v_id;
 
   return v_id;
@@ -228,7 +228,7 @@ create function public.schedule_recurring_auctions(
   p_title text, p_description text, p_image_url text,
   p_start_price integer, p_duration_min integer, p_confirm_window_min integer,
   p_first_start timestamptz, p_repeat_count integer, p_interval_hours numeric,
-  p_max_price integer default null
+  p_max_price integer default null, p_category_id uuid default null
 ) returns setof uuid
 language plpgsql security definer set search_path = public as $$
 declare
@@ -250,9 +250,9 @@ begin
 
   for i in 0..(p_repeat_count - 1) loop
     v_start := p_first_start + (i * p_interval_hours || ' hours')::interval;
-    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by)
+    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, category_id)
     values (p_title, p_description, p_image_url, p_start_price, p_max_price, v_start,
-            v_start + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid())
+            v_start + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), p_category_id)
     returning id into v_id;
     return next v_id;
   end loop;
@@ -380,9 +380,9 @@ declare
 begin
   if coalesce(v_auction.repeat_remaining, 0) > 0 then
     v_duration := v_auction.ends_at - v_auction.starts_at;
-    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining)
+    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id)
     values (v_auction.title, v_auction.description, v_auction.image_url, v_auction.start_price, v_auction.max_price,
-            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1);
+            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1, v_auction.category_id);
   end if;
 end;
 $$;
@@ -640,6 +640,98 @@ revoke all on function public._auto_process_auctions() from public, anon, authen
 -- Programa el reloj: corre cada minuto, todo el día, todos los días
 create extension if not exists pg_cron;
 select cron.schedule('auto-process-auctions', '* * * * *', $$select public._auto_process_auctions()$$);
+
+-- ============================================================
+-- 8) REDENCIÓN DE PREMIOS: marca cuándo un ganador ya vino a
+-- reclamar su premio en persona. Cualquier admin puede marcarla.
+-- ============================================================
+
+alter table public.auctions
+  add column if not exists redeemed_at timestamptz,
+  add column if not exists redeemed_by uuid references public.profiles(id);
+
+create or replace function public.mark_redeemed(p_auction_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_is_admin boolean;
+  v_auction record;
+begin
+  select is_admin into v_is_admin from public.profiles where id = auth.uid();
+  if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede marcar como redimida'; end if;
+
+  select * into v_auction from public.auctions where id = p_auction_id for update;
+  if v_auction is null then raise exception 'Subasta no encontrada'; end if;
+  if v_auction.status <> 'closed' or v_auction.winner_user_id is null then
+    raise exception 'Esta subasta no tiene un ganador cerrado para redimir';
+  end if;
+  if v_auction.redeemed_at is not null then
+    raise exception 'Esta subasta ya fue marcada como redimida';
+  end if;
+
+  update public.auctions set redeemed_at = now(), redeemed_by = auth.uid() where id = p_auction_id;
+end;
+$$;
+
+-- ============================================================
+-- 9) CATEGORÍAS: agrupar productos (ej: "Salchipapas", "Combos")
+-- para que los clientes puedan filtrar la lista de subastas.
+-- ============================================================
+
+create table if not exists public.auction_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.auction_categories enable row level security;
+
+drop policy if exists "cualquiera autenticado puede ver categorias" on public.auction_categories;
+create policy "cualquiera autenticado puede ver categorias"
+  on public.auction_categories for select
+  using (auth.role() = 'authenticated');
+
+-- Crear/borrar categorías solo pasa por estas funciones (más abajo)
+
+alter table public.auctions
+  add column if not exists category_id uuid references public.auction_categories(id);
+
+-- Crea una categoría (solo admin). Si ya existe una con ese nombre
+-- (sin importar mayúsculas/espacios), devuelve la existente en vez de fallar.
+create or replace function public.create_category(p_name text)
+returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  v_is_admin boolean;
+  v_id uuid;
+begin
+  select is_admin into v_is_admin from public.profiles where id = auth.uid();
+  if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede crear categorías'; end if;
+  if p_name is null or trim(p_name) = '' then raise exception 'El nombre de la categoría no puede estar vacío'; end if;
+
+  select id into v_id from public.auction_categories where lower(name) = lower(trim(p_name));
+  if v_id is not null then return v_id; end if;
+
+  insert into public.auction_categories (name, created_by) values (trim(p_name), auth.uid())
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+-- Borra una categoría (solo admin). Las subastas que la tenían quedan sin
+-- categoría (category_id vuelve null) gracias a la referencia de la columna.
+create or replace function public.delete_category(p_category_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare v_is_admin boolean;
+begin
+  select is_admin into v_is_admin from public.profiles where id = auth.uid();
+  if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede borrar categorías'; end if;
+  update public.auctions set category_id = null where category_id = p_category_id;
+  delete from public.auction_categories where id = p_category_id;
+end;
+$$;
 
 -- ============================================================
 -- ÚLTIMO PASO (hazlo tú, manualmente, después de registrarte):

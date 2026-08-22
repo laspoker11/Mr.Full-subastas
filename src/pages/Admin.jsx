@@ -5,7 +5,9 @@ import { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney } from "../components/AuctionCard";
 import { THEMES, applyTheme } from "../lib/themes";
 import { useSiteSettings } from "../lib/siteSettings";
-import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon } from "lucide-react";
+import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon, Package, BarChart3 } from "lucide-react";
+
+const DURATION_UNITS = { min: { label: "Minutos", minValue: 15, toMinutes: 1 }, hora: { label: "Horas", minValue: 1, toMinutes: 60 }, dia: { label: "Días", minValue: 1, toMinutes: 1440 } };
 
 export default function Admin() {
   const { isAdmin, loading } = useAuth();
@@ -29,10 +31,12 @@ function AdminDashboard() {
   const [tab, setTab] = useState("subastas");
   const [auctions, setAuctions] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [bidsByAuction, setBidsByAuction] = useState({});
   const [profilesById, setProfilesById] = useState({});
   const [form, setForm] = useState({
-    title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationMin: 15, confirmWindowMin: 15,
+    title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 15,
+    categoryId: "", newCategoryName: "",
     startMode: "now", // "now" | "scheduled"
     startAt: "", // datetime-local string
     saveAsTemplate: false,
@@ -40,12 +44,16 @@ function AdminDashboard() {
   });
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [uploadingAuctionImage, setUploadingAuctionImage] = useState(false);
 
   const load = useCallback(async () => {
     const { data: a } = await supabase.from("auctions").select("*").order("starts_at", { ascending: true }).limit(80);
     setAuctions(a || []);
     const { data: t } = await supabase.from("auction_templates").select("*").order("created_at", { ascending: false });
     setTemplates(t || []);
+    const { data: c } = await supabase.from("auction_categories").select("*").order("name", { ascending: true });
+    setCategories(c || []);
     const { data: b } = await supabase.from("bids").select("*").order("created_at", { ascending: false });
     const byAuction = {};
     (b || []).forEach((bid) => {
@@ -78,7 +86,7 @@ function AdminDashboard() {
   function useTemplate(t) {
     setForm((f) => ({
       ...f, title: t.title, description: t.description, imageUrl: t.image_url,
-      startPrice: t.start_price, maxPrice: t.max_price ?? "", durationMin: t.duration_min, confirmWindowMin: t.confirm_window_min,
+      startPrice: t.start_price, maxPrice: t.max_price ?? "", durationValue: t.duration_min, durationUnit: "min", confirmWindowMin: t.confirm_window_min,
     }));
   }
 
@@ -89,11 +97,42 @@ function AdminDashboard() {
     load();
   }
 
+  async function uploadAuctionImage(file) {
+    if (!file) return;
+    setFormError("");
+    if (!file.type.startsWith("image/")) return setFormError("Ese archivo no es una imagen.");
+    if (file.size > 5 * 1024 * 1024) return setFormError("La imagen no puede pesar más de 5 MB.");
+
+    setUploadingAuctionImage(true);
+    const ext = file.name.split(".").pop();
+    const path = `auctions/${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
+    setUploadingAuctionImage(false);
+    if (error) return setFormError("No se pudo subir la imagen: " + error.message);
+
+    const { data } = supabase.storage.from("site-assets").getPublicUrl(path);
+    setForm((f) => ({ ...f, imageUrl: data.publicUrl }));
+  }
+
+  async function createCategory() {
+    if (!form.newCategoryName.trim()) return;
+    setCreatingCategory(true);
+    const { data, error } = await supabase.rpc("create_category", { p_name: form.newCategoryName.trim() });
+    setCreatingCategory(false);
+    if (error) return setFormError("No se pudo crear la categoría: " + error.message);
+    setForm((f) => ({ ...f, categoryId: data, newCategoryName: "" }));
+    load();
+  }
+
   async function createAuction() {
     setFormError("");
     if (!form.title.trim()) return setFormError("Ponle un nombre al producto.");
     if (!form.startPrice || form.startPrice <= 0) return setFormError("El precio inicial debe ser mayor a 0.");
-    if (!form.durationMin || form.durationMin <= 0) return setFormError("La duración debe ser mayor a 0 minutos.");
+    const unit = DURATION_UNITS[form.durationUnit];
+    if (!form.durationValue || Number(form.durationValue) < unit.minValue) {
+      return setFormError(`La duración mínima es ${unit.minValue} ${unit.label.toLowerCase()}.`);
+    }
+    const durationMinTotal = Number(form.durationValue) * unit.toMinutes;
     if (form.startMode === "scheduled" && !form.startAt) return setFormError("Elige la fecha y hora de inicio.");
     const maxPriceValue = form.maxPrice === "" ? null : Number(form.maxPrice);
     if (maxPriceValue !== null && maxPriceValue < Number(form.startPrice)) {
@@ -107,21 +146,23 @@ function AdminDashboard() {
     if (form.saveAsTemplate) {
       await supabase.rpc("save_template", {
         p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-        p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+        p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 15,
         p_max_price: maxPriceValue,
       });
     }
 
     const { error } = await supabase.rpc("create_auction", {
       p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-      p_start_price: Number(form.startPrice), p_duration_min: Number(form.durationMin), p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+      p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 15,
       p_starts_at: startsAtISO, p_max_price: maxPriceValue, p_repeat_remaining: Number(form.repeatAfterClose) || 0,
+      p_category_id: form.categoryId || null,
     });
 
     setSaving(false);
     if (error) return setFormError("Error al publicar: " + error.message);
     setForm({
-      title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationMin: 15, confirmWindowMin: 15,
+      title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 15,
+      categoryId: "", newCategoryName: "",
       startMode: "now", startAt: "", saveAsTemplate: false, repeatAfterClose: 0,
     });
     load();
@@ -137,7 +178,7 @@ function AdminDashboard() {
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 14px 60px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, background: "var(--crema-suave)", padding: 4, borderRadius: 10 }}>
-          {[["subastas", "Subastas"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
+          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["reporte", "📊 Reporte"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
               fontWeight: 700, fontSize: 13, background: tab === id ? "var(--ladrillo)" : "transparent",
@@ -154,6 +195,10 @@ function AdminDashboard() {
         <AdminUsers />
       ) : tab === "diseno" ? (
         <AdminDesign />
+      ) : tab === "redimir" ? (
+        <RedeemPanel auctions={auctions} bidsByAuction={bidsByAuction} profilesById={profilesById} onChanged={load} />
+      ) : tab === "reporte" ? (
+        <ReportPanel auctions={auctions} bidsByAuction={bidsByAuction} />
       ) : (
       <>
       <div className="card">
@@ -183,12 +228,49 @@ function AdminDashboard() {
           <input className="input" placeholder="Producto (ej: Hamburguesa Familiar)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <input className="input" placeholder="Descripción corta (opcional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           <input className="input" placeholder="URL de la imagen (opcional)" value={form.imageUrl} onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {form.imageUrl && (
+              <img src={form.imageUrl} alt="Vista previa" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain", background: "var(--crema-suave)", flexShrink: 0 }} />
+            )}
+            <label className="btn-ghost" style={{ cursor: "pointer" }}>
+              {uploadingAuctionImage ? "Subiendo..." : "📤 Subir imagen"}
+              <input
+                type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingAuctionImage}
+                onChange={(e) => uploadAuctionImage(e.target.files[0])}
+              />
+            </label>
+            <ImageGalleryPicker onSelect={(url) => setForm((f) => ({ ...f, imageUrl: url }))} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>Categoría (opcional)</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <select className="input" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })} style={{ flex: 1 }}>
+                <option value="">Sin categoría</option>
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <input
+                className="input" placeholder="Nueva categoría..." value={form.newCategoryName}
+                onChange={(e) => setForm({ ...form, newCategoryName: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="btn-ghost" onClick={createCategory} disabled={creatingCategory || !form.newCategoryName.trim()}>
+                {creatingCategory ? "..." : "+"}
+              </button>
+            </div>
+          </div>
+
           <div style={{ display: "flex", gap: 8 }}>
             <LabeledInput label="Precio inicial" value={form.startPrice} onChange={(v) => setForm({ ...form, startPrice: v })} />
             <LabeledInput label="Precio máximo (opcional)" value={form.maxPrice} onChange={(v) => setForm({ ...form, maxPrice: v })} />
-            <LabeledInput label="Duración (min)" value={form.durationMin} onChange={(v) => setForm({ ...form, durationMin: v })} />
             <LabeledInput label="Confirmar (min)" value={form.confirmWindowMin} onChange={(v) => setForm({ ...form, confirmWindowMin: v })} />
           </div>
+
+          <DurationInput
+            value={form.durationValue} unit={form.durationUnit}
+            onChange={(v, u) => setForm({ ...form, durationValue: v, durationUnit: u })}
+          />
 
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginTop: 2 }}>
             <input type="checkbox" checked={form.saveAsTemplate} onChange={(e) => setForm({ ...form, saveAsTemplate: e.target.checked })} />
@@ -454,11 +536,42 @@ function LabeledInput({ label, value, onChange }) {
   );
 }
 
+function DurationInput({ value, unit, onChange }) {
+  const unitInfo = DURATION_UNITS[unit];
+
+  function changeUnit(u) {
+    const min = DURATION_UNITS[u].minValue;
+    onChange(Math.max(Number(value) || 0, min), u);
+  }
+
+  function increment() {
+    onChange(Number(value) + 1, unit);
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>Duración (mínimo {unitInfo.minValue} {unitInfo.label.toLowerCase()})</div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select className="input" value={unit} onChange={(e) => changeUnit(e.target.value)} style={{ flex: 1 }}>
+          {Object.entries(DURATION_UNITS).map(([key, u]) => <option key={key} value={key}>{u.label}</option>)}
+        </select>
+        <input
+          className="input" type="number" min={unitInfo.minValue} value={value}
+          onChange={(e) => onChange(e.target.value, unit)}
+          style={{ width: 70 }}
+        />
+        <button type="button" className="btn-ghost" onClick={increment} style={{ padding: "0 16px" }}>+</button>
+      </div>
+    </div>
+  );
+}
+
 function AdminUsers() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState("points");
   const [query, setQuery] = useState("");
+  const [expandedId, setExpandedId] = useState(null);
 
   const load = useCallback(async () => {
     const { data: profs } = await supabase.from("profiles").select("*");
@@ -500,26 +613,110 @@ function AdminUsers() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {filtered.map((u, i) => (
-            <div key={u.id} style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "10px 12px", borderRadius: 10, background: i === 0 && sortBy === "points" ? "var(--queso-claro)" : "var(--crema-suave)",
-            }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
-                  {i === 0 && sortBy === "points" && "🏆"} {u.full_name}
-                  {u.is_admin && <span className="pill" style={{ background: "var(--carbon)", color: "var(--queso)", fontSize: 9.5 }}>ADMIN</span>}
+            <div key={u.id}>
+              <div
+                onClick={() => setExpandedId(expandedId === u.id ? null : u.id)}
+                style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer",
+                  padding: "10px 12px", borderRadius: 10, background: i === 0 && sortBy === "points" ? "var(--queso-claro)" : "var(--crema-suave)",
+                  border: expandedId === u.id ? "2px solid var(--ladrillo)" : "2px solid transparent",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                    {i === 0 && sortBy === "points" && "🏆"} {u.full_name}
+                    {u.is_admin && <span className="pill" style={{ background: "var(--carbon)", color: "var(--queso)", fontSize: 9.5 }}>ADMIN</span>}
+                  </div>
+                  <div style={{ fontSize: 11, opacity: 0.6 }}>
+                    {u.phone} · Registrado el {new Date(u.created_at).toLocaleDateString("es-CO", { dateStyle: "medium" })}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, opacity: 0.6 }}>
-                  {u.phone} · Registrado el {new Date(u.created_at).toLocaleDateString("es-CO", { dateStyle: "medium" })}
+                <div style={{ textAlign: "right", fontSize: 11.5 }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>{u.points} pts</div>
+                  <div style={{ opacity: 0.6 }}>{u.auctions_won} ganadas · {u.auctions_participated} participadas</div>
                 </div>
               </div>
-              <div style={{ textAlign: "right", fontSize: 11.5 }}>
-                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>{u.points} pts</div>
-                <div style={{ opacity: 0.6 }}>{u.auctions_won} ganadas · {u.auctions_participated} participadas</div>
-              </div>
+              {expandedId === u.id && <UserDetailPanel user={u} />}
             </div>
           ))}
           {filtered.length === 0 && <div style={{ textAlign: "center", padding: 20, opacity: 0.5, fontSize: 13 }}>Sin resultados</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Historial completo de subastas de UN usuario en particular (para que el
+// admin lo vea desde la pestaña Usuarios) — misma lógica que /perfil, pero
+// mirando a otra persona en vez de al usuario logueado.
+function UserDetailPanel({ user }) {
+  const [rows, setRows] = useState([]);
+  const [userBids, setUserBids] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      setLoading(true);
+      const { data: participation } = await supabase
+        .from("auction_participation")
+        .select("auction_id, joined_at, auctions(*)")
+        .eq("user_id", user.id)
+        .order("joined_at", { ascending: false });
+      const list = (participation || []).filter((p) => p.auctions);
+      if (active) setRows(list);
+
+      const ids = list.map((p) => p.auction_id);
+      if (ids.length) {
+        const { data: bids } = await supabase
+          .from("bids")
+          .select("auction_id, amount")
+          .eq("user_id", user.id)
+          .in("auction_id", ids);
+        const map = {};
+        (bids || []).forEach((b) => {
+          if (!map[b.auction_id] || b.amount > map[b.auction_id]) map[b.auction_id] = b.amount;
+        });
+        if (active) setUserBids(map);
+      }
+      if (active) setLoading(false);
+    }
+
+    load();
+    return () => { active = false; };
+  }, [user.id]);
+
+  return (
+    <div className="card" style={{ marginTop: 6, marginBottom: 4 }}>
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 20, opacity: 0.6 }}>Cargando historial...</div>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 20, opacity: 0.6, fontSize: 13 }}>
+          Este usuario todavía no ha participado en ninguna subasta.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.6 }}>HISTORIAL DE SUBASTAS ({rows.length})</div>
+          {rows.map((p) => {
+            const a = p.auctions;
+            const iWon = a.status === "closed" && a.winner_user_id === user.id;
+            const closedNotWon = a.status === "closed" && a.winner_user_id !== user.id;
+            const running = a.status === "live" || a.status === "confirming";
+            const cancelled = a.status === "void";
+
+            return (
+              <div key={p.auction_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", borderRadius: 8, background: "var(--crema-suave)", fontSize: 13 }}>
+                <span>{a.title}</span>
+                <span style={{ opacity: 0.75 }}>
+                  {running && "🟢 En curso"}
+                  {iWon && `🏆 Ganada · ${fmtMoney(userBids[p.auction_id] ?? a.start_price)}`}
+                  {closedNotWon && "❌ No ganada"}
+                  {cancelled && "🚫 Cancelada"}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -654,5 +851,212 @@ function AdminDesign() {
       </button>
       {saved && <div className="success-text">✅ Diseño guardado — ya lo ven todos tus usuarios.</div>}
     </div>
+  );
+}
+
+// Encuentra la puja ganadora real de una subasta cerrada (por id, con respaldo
+// a la más alta no anulada si por alguna razón winner_bid_id no calza)
+function winningBid(auction, bidsByAuction) {
+  const list = bidsByAuction[auction.id] || [];
+  return (
+    list.find((b) => b.id === auction.winner_bid_id) ||
+    [...list].filter((b) => !b.voided).sort((x, y) => y.amount - x.amount)[0] ||
+    null
+  );
+}
+
+// Mejor puja histórica de una subasta (voided o no), para medir cuánto se
+// dejó de vender en una subasta cancelada o vencida sin ganador
+function bestBidEver(auction, bidsByAuction) {
+  const list = bidsByAuction[auction.id] || [];
+  if (!list.length) return null;
+  return Math.max(...list.map((b) => b.amount));
+}
+
+function RedeemPanel({ auctions, bidsByAuction, profilesById, onChanged }) {
+  const [busyId, setBusyId] = useState(null);
+  const pending = auctions.filter((a) => a.status === "closed" && a.winner_user_id && !a.redeemed_at);
+
+  async function redeem(auctionId) {
+    setBusyId(auctionId);
+    const { error } = await supabase.rpc("mark_redeemed", { p_auction_id: auctionId });
+    setBusyId(null);
+    if (error) return alert(error.message);
+    onChanged();
+  }
+
+  if (pending.length === 0) {
+    return (
+      <div className="card" style={{ textAlign: "center", padding: 40 }}>
+        <Package size={26} color="var(--salsa)" />
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginTop: 8 }}>
+          No hay premios pendientes por redimir
+        </div>
+        <div style={{ fontSize: 13, opacity: 0.6, marginTop: 4 }}>
+          Todos los ganadores de subastas cerradas ya vinieron a reclamar su premio.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>
+        Pendientes por redimir ({pending.length})
+      </div>
+      {pending.map((a) => {
+        const win = winningBid(a, bidsByAuction);
+        const winner = profilesById[a.winner_user_id];
+        return (
+          <div key={a.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{a.title}</div>
+              <div style={{ fontSize: 12.5, opacity: 0.7 }}>
+                {winner?.full_name || "..."} · {winner?.phone || ""}
+              </div>
+              <div style={{ fontSize: 11.5, opacity: 0.5 }}>
+                Ganó el {win ? new Date(win.created_at).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" }) : "..."}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>
+                {fmtMoney(win?.amount ?? a.start_price)}
+              </span>
+              <button className="btn-primary" disabled={busyId === a.id} onClick={() => redeem(a.id)}>
+                {busyId === a.id ? "..." : "Marcar como redimida"}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReportPanel({ auctions, bidsByAuction }) {
+  const soldAuctions = auctions.filter((a) => a.status === "closed" && a.winner_user_id);
+  const redeemedAuctions = soldAuctions.filter((a) => a.redeemed_at);
+  const failedAuctions = auctions.filter((a) => a.status === "void" || (a.status === "closed" && !a.winner_user_id));
+
+  const amountOf = (a) => winningBid(a, bidsByAuction)?.amount ?? a.start_price;
+
+  const soldSum = soldAuctions.reduce((s, a) => s + amountOf(a), 0);
+  const redeemedSum = redeemedAuctions.reduce((s, a) => s + amountOf(a), 0);
+  const pendingSum = soldSum - redeemedSum;
+  const pendingCount = soldAuctions.length - redeemedAuctions.length;
+
+  const failedWithBids = failedAuctions
+    .map((a) => ({ auction: a, best: bestBidEver(a, bidsByAuction) }))
+    .filter((x) => x.best !== null);
+  const failedSum = failedWithBids.reduce((s, x) => s + x.best, 0);
+
+  const cards = [
+    { label: "Vendidas", amount: soldSum, count: soldAuctions.length, color: "var(--salsa)" },
+    { label: "Redimidas", amount: redeemedSum, count: redeemedAuctions.length, color: "var(--queso)" },
+    { label: "Pendientes por redimir", amount: pendingSum, count: pendingCount, color: "var(--ladrillo)" },
+    { label: "Canceladas o vencidas", amount: failedSum, count: failedAuctions.length, color: "var(--alerta)" },
+  ];
+
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <BarChart3 size={16} /> Reporte financiero
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {cards.map((c) => (
+          <div key={c.label} className="card" style={{ borderLeft: `4px solid ${c.color}` }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.6, textTransform: "uppercase" }}>{c.label}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 20, marginTop: 4 }}>{fmtMoney(c.amount)}</div>
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{c.count} subasta{c.count === 1 ? "" : "s"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Botón que abre una cuadrícula con las imágenes ya subidas a la carpeta
+// "auctions/" del bucket site-assets, para reusarlas sin subirlas de nuevo.
+function ImageGalleryPicker({ onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  async function loadFiles() {
+    setLoading(true);
+    const { data, error } = await supabase.storage.from("site-assets").list("auctions", {
+      limit: 100, sortBy: { column: "created_at", order: "desc" },
+    });
+    setLoading(false);
+    if (error) return alert(error.message);
+    setFiles((data || []).filter((f) => f.name && f.id));
+  }
+
+  function openGallery() {
+    setOpen(true);
+    loadFiles();
+  }
+
+  function publicUrlFor(name) {
+    const { data } = supabase.storage.from("site-assets").getPublicUrl(`auctions/${name}`);
+    return data.publicUrl;
+  }
+
+  async function deleteFile(name) {
+    if (!confirm("¿Borrar esta imagen de la galería? Esto no se puede deshacer.")) return;
+    const { error } = await supabase.storage.from("site-assets").remove([`auctions/${name}`]);
+    if (error) return alert(error.message);
+    loadFiles();
+  }
+
+  return (
+    <>
+      <button type="button" className="btn-ghost" onClick={openGallery}>🖼️ Elegir de la galería</button>
+      {open && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setOpen(false)}
+        >
+          <div className="card" style={{ maxWidth: 480, width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>Galería de imágenes</div>
+              <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex" }}>
+                <X size={18} />
+              </button>
+            </div>
+            {loading ? (
+              <div style={{ textAlign: "center", padding: 30, opacity: 0.6 }}>Cargando...</div>
+            ) : files.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 30, opacity: 0.6, fontSize: 13 }}>
+                Todavía no has subido ninguna imagen de subastas.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {files.map((f) => (
+                  <div key={f.name} style={{ position: "relative" }}>
+                    <img
+                      src={publicUrlFor(f.name)}
+                      alt={f.name}
+                      style={{ width: "100%", height: 80, objectFit: "contain", background: "var(--crema-suave)", borderRadius: 8, cursor: "pointer", border: "2px solid var(--crema-suave)", display: "block" }}
+                      onClick={() => { onSelect(publicUrlFor(f.name)); setOpen(false); }}
+                    />
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteFile(f.name); }}
+                      title="Borrar de la galería"
+                      style={{
+                        position: "absolute", top: 4, right: 4, background: "var(--alerta)", border: "none", borderRadius: "50%",
+                        width: 20, height: 20, color: "white", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

@@ -7,6 +7,8 @@ import { Flame } from "lucide-react";
 export default function Cliente() {
   const { cover_image_url } = useSiteSettings();
   const [auctions, setAuctions] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(null);
   const [topAmounts, setTopAmounts] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -19,6 +21,9 @@ export default function Cliente() {
       .limit(30);
     if (error) { console.error(error); setLoading(false); return; }
     setAuctions(auctionRows || []);
+
+    const { data: categoryRows } = await supabase.from("auction_categories").select("*").order("name", { ascending: true });
+    setCategories(categoryRows || []);
 
     const { data: bidRows } = await supabase
       .from("bids")
@@ -44,9 +49,10 @@ export default function Cliente() {
   }, [load]);
 
   const now = Date.now();
-  const live = auctions.filter((a) => (a.status === "live" && new Date(a.starts_at).getTime() <= now) || a.status === "confirming");
-  const upcoming = auctions.filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now);
-  const closed = auctions.filter((a) => a.status === "closed");
+  const filteredAuctions = selectedCategory ? auctions.filter((a) => a.category_id === selectedCategory) : auctions;
+  const live = filteredAuctions.filter((a) => (a.status === "live" && new Date(a.starts_at).getTime() <= now) || a.status === "confirming");
+  const upcoming = filteredAuctions.filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now);
+  const closed = filteredAuctions.filter((a) => a.status === "closed");
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "20px 14px 60px" }}>
@@ -56,6 +62,37 @@ export default function Cliente() {
           style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 16, marginBottom: 18 }}
         />
       )}
+
+      {categories.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+          <button
+            onClick={() => setSelectedCategory(null)}
+            className="pill"
+            style={{
+              border: "none", cursor: "pointer", fontSize: 12.5, padding: "6px 14px",
+              background: !selectedCategory ? "var(--ladrillo)" : "var(--crema-suave)",
+              color: !selectedCategory ? "white" : "var(--carbon)",
+            }}
+          >
+            Todas
+          </button>
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setSelectedCategory(c.id)}
+              className="pill"
+              style={{
+                border: "none", cursor: "pointer", fontSize: 12.5, padding: "6px 14px",
+                background: selectedCategory === c.id ? "var(--ladrillo)" : "var(--crema-suave)",
+                color: selectedCategory === c.id ? "white" : "var(--carbon)",
+              }}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div style={{ textAlign: "center", padding: 60, opacity: 0.6 }}>Cargando subastas...</div>
       ) : live.length === 0 ? (
@@ -86,7 +123,7 @@ export default function Cliente() {
             {upcoming.map((a) => (
               <div key={a.id} className="card" style={{ display: "flex", gap: 12, alignItems: "center", opacity: 0.8 }}>
                 <div style={{ width: 56, height: 56, borderRadius: 12, background: "var(--crema-suave)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  {a.image_url ? <img src={a.image_url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 12 }} /> : <Flame size={20} color="var(--ladrillo)" />}
+                  {a.image_url ? <img src={a.image_url} alt={a.title} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 12 }} /> : <Flame size={20} color="var(--ladrillo)" />}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{a.title}</div>

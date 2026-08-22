@@ -38,6 +38,9 @@ export default function Login() {
       <div style={{ textAlign: "center", fontSize: 13, marginTop: 14 }}>
         ¿No tienes cuenta? <Link to="/registro" style={{ color: "var(--ladrillo)", fontWeight: 700 }}>Regístrate aquí</Link>
       </div>
+      <div style={{ textAlign: "center", fontSize: 12.5, marginTop: 8 }}>
+        <Link to="/olvide-password" style={{ color: "var(--carbon)", opacity: 0.6 }}>¿Olvidaste tu contraseña?</Link>
+      </div>
     </div>
   );
 }

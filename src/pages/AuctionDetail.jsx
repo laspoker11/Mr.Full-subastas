@@ -101,7 +101,7 @@ export default function AuctionDetail() {
       <div style={{ marginTop: 12, background: "var(--ladrillo)", borderRadius: 20, padding: 6 }}>
         <div style={{ background: "var(--crema)", borderRadius: 15, overflow: "hidden" }}>
           {auction.image_url ? (
-            <img src={auction.image_url} alt={auction.title} style={{ width: "100%", height: 200, objectFit: "cover", display: "block" }} />
+            <img src={auction.image_url} alt={auction.title} style={{ width: "100%", maxHeight: 320, objectFit: "contain", display: "block", background: "var(--crema-suave)" }} />
           ) : (
             <div style={{ width: "100%", height: 140, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--crema-suave)" }}>
               <Flame size={38} color="var(--ladrillo)" />
