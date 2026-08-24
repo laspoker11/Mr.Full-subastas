@@ -17,7 +17,7 @@ export default function Cliente() {
       .from("auctions")
       .select("*")
       .neq("status", "void")
-      .order("starts_at", { ascending: true })
+      .order("starts_at", { ascending: false })
       .limit(30);
     if (error) { console.error(error); setLoading(false); return; }
     setAuctions(auctionRows || []);
@@ -51,7 +51,9 @@ export default function Cliente() {
   const now = Date.now();
   const filteredAuctions = selectedCategory ? auctions.filter((a) => a.category_id === selectedCategory) : auctions;
   const live = filteredAuctions.filter((a) => (a.status === "live" && new Date(a.starts_at).getTime() <= now) || a.status === "confirming");
-  const upcoming = filteredAuctions.filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now);
+  const upcoming = filteredAuctions
+    .filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now)
+    .sort((x, y) => new Date(x.starts_at) - new Date(y.starts_at));
   const closed = filteredAuctions.filter((a) => a.status === "closed");
 
   return (

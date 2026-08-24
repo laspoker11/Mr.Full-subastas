@@ -48,7 +48,7 @@ function AdminDashboard() {
   const [uploadingAuctionImage, setUploadingAuctionImage] = useState(false);
 
   const load = useCallback(async () => {
-    const { data: a } = await supabase.from("auctions").select("*").order("starts_at", { ascending: true }).limit(80);
+    const { data: a } = await supabase.from("auctions").select("*").order("starts_at", { ascending: false }).limit(80);
     setAuctions(a || []);
     const { data: t } = await supabase.from("auction_templates").select("*").order("created_at", { ascending: false });
     setTemplates(t || []);
@@ -170,7 +170,9 @@ function AdminDashboard() {
 
   const now = Date.now();
   const runningAuctions = auctions.filter((a) => (a.status === "live" && new Date(a.starts_at).getTime() <= now) || a.status === "confirming");
-  const scheduledAuctions = auctions.filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now);
+  const scheduledAuctions = auctions
+    .filter((a) => a.status === "live" && new Date(a.starts_at).getTime() > now)
+    .sort((x, y) => new Date(x.starts_at) - new Date(y.starts_at));
   const closedAuctions = auctions.filter((a) => a.status === "closed");
   const cancelledAuctions = auctions.filter((a) => a.status === "void");
 
