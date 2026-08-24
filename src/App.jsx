@@ -1,6 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { SiteSettingsProvider } from "./lib/siteSettings";
+import { supabase } from "./supabaseClient";
 import NavBar from "./components/NavBar";
 import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
 import Login from "./pages/Login";
@@ -21,6 +23,21 @@ function RequireAuth({ children }) {
 }
 
 function Shell() {
+  const navigate = useNavigate();
+
+  // Seguro: si el enlace de "recuperar contraseña" del correo aterriza en
+  // cualquier otra página (por configuración de Supabase), lo mandamos a la
+  // pantalla de nueva contraseña de todos modos, para no dejar al usuario
+  // con una sesión abierta sin haber cambiado la contraseña.
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        navigate("/restablecer-password", { replace: true });
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [navigate]);
+
   return (
     <>
       <NavBar />
