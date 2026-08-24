@@ -206,7 +206,11 @@ export default function AuctionDetail() {
                 })}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <input className="input" type="number" placeholder={`O escribe un monto (mín. ${fmtMoney(min)})`} value={amount} onChange={(e) => setAmount(e.target.value)} />
+                <input
+                  className="input" type="text" inputMode="numeric"
+                  placeholder={`O escribe un monto (mín. ${fmtMoney(min)})`} value={amount}
+                  onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ""))}
+                />
                 <button className="btn-primary" disabled={busy} type="submit" style={{ whiteSpace: "nowrap" }}>Pujar 🔥</button>
               </div>
             </>

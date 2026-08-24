@@ -308,7 +308,7 @@ language sql immutable as $$
 $$;
 
 -- Pujar (cualquier usuario autenticado, sobre sí mismo)
-create function public.place_bid(p_auction_id uuid, p_amount integer)
+create or replace function public.place_bid(p_auction_id uuid, p_amount integer)
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare
@@ -317,6 +317,7 @@ declare
   v_min integer;
   v_bid_id uuid;
   v_new_participant integer;
+  v_unredeemed_wins integer;
 begin
   select * into v_auction from public.auctions where id = p_auction_id for update;
   if v_auction is null then raise exception 'Subasta no encontrada'; end if;
@@ -325,6 +326,14 @@ begin
   end if;
   if v_auction.status <> 'live' or v_auction.ends_at < now() then
     raise exception 'Esta subasta ya cerró';
+  end if;
+
+  -- Si ya tiene 3 premios ganados sin redimir, no puede pujar en nada más
+  -- hasta que redima al menos uno.
+  select count(*) into v_unredeemed_wins from public.auctions
+    where winner_user_id = auth.uid() and status = 'closed' and redeemed_at is null;
+  if v_unredeemed_wins >= 3 then
+    raise exception 'Tienes % premios ganados sin redimir. Debes redimir al menos uno antes de volver a pujar.', v_unredeemed_wins;
   end if;
 
   select max(amount) into v_top_amount from public.bids
@@ -432,9 +441,9 @@ begin
 end;
 $$;
 
--- Admin archiva la subasta ya confirmada: da los 30 puntos al ganador
--- y encadena la siguiente subasta si quedan repeticiones programadas.
-create function public.archive_auction(p_auction_id uuid)
+-- Admin archiva la subasta ya confirmada (los 30 puntos se dan al redimir,
+-- no aquí) y encadena la siguiente subasta si quedan repeticiones programadas.
+create or replace function public.archive_auction(p_auction_id uuid)
 returns void
 language plpgsql security definer set search_path = public as $$
 declare
@@ -449,7 +458,7 @@ begin
 
   if v_auction.winner_user_id is not null then
     update public.profiles
-      set points = points + 30, auctions_won = auctions_won + 1
+      set auctions_won = auctions_won + 1
       where id = v_auction.winner_user_id;
   end if;
 
@@ -581,9 +590,10 @@ end;
 $$;
 
 -- Resuelve las subastas cuyo tiempo de confirmación ya venció:
--- si el ganador SÍ confirmó a tiempo, archiva (da puntos y encadena);
--- si NO confirmó, pasa al siguiente postor (o cierra y encadena si no queda nadie).
-create function public._auto_finalize_confirming_auctions()
+-- si el ganador SÍ confirmó a tiempo, archiva (encadena; los 30 puntos se dan
+-- al redimir, no aquí); si NO confirmó, pasa al siguiente postor (o cierra y
+-- encadena si no queda nadie).
+create or replace function public._auto_finalize_confirming_auctions()
 returns void
 language plpgsql security definer set search_path = public as $$
 declare
@@ -596,7 +606,7 @@ begin
     if v_auction.winner_confirmed then
       if v_auction.winner_user_id is not null then
         update public.profiles
-          set points = points + 30, auctions_won = auctions_won + 1
+          set auctions_won = auctions_won + 1
           where id = v_auction.winner_user_id;
       end if;
       update public.auctions set status = 'closed' where id = v_auction.id;
@@ -670,6 +680,10 @@ begin
   end if;
 
   update public.auctions set redeemed_at = now(), redeemed_by = auth.uid() where id = p_auction_id;
+
+  -- Los 30 puntos por ganar se dan hasta que el premio se redime de verdad,
+  -- no en el momento de ganar la subasta.
+  update public.profiles set points = points + 30 where id = v_auction.winner_user_id;
 end;
 $$;
 

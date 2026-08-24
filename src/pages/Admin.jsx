@@ -530,10 +530,16 @@ function AuctionAdminCard({ auction, bids, profilesById, onChanged }) {
 }
 
 function LabeledInput({ label, value, onChange }) {
+  // Precios en pesos colombianos: sin decimales. Si alguien escribe "10.000"
+  // pensando en diez mil, un <input type="number"> normal lo interpreta como
+  // el decimal 10.000 = 10 — por eso se ignora cualquier punto o coma.
   return (
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>{label}</div>
-      <input className="input" type="number" value={value} onChange={(e) => onChange(e.target.value)} />
+      <input
+        className="input" type="text" inputMode="numeric" value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ""))}
+      />
     </div>
   );
 }
