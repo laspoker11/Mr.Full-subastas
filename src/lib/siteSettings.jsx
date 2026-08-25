@@ -5,7 +5,7 @@ import { applyTheme } from "./themes";
 const SiteSettingsContext = createContext(null);
 
 export function SiteSettingsProvider({ children }) {
-  const [settings, setSettings] = useState({ theme: "fuego", logo_url: "", cover_image_url: "" });
+  const [settings, setSettings] = useState({ theme: "fuego", logo_url: "", cover_image_url: "", commission_percent: 8 });
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {

@@ -79,7 +79,7 @@ create table public.auctions (
   max_price integer check (max_price is null or max_price >= start_price),
   starts_at timestamptz not null default now(),
   ends_at timestamptz not null,
-  confirm_window_min integer not null default 15,
+  confirm_window_min integer not null default 25,
   status text not null default 'live' check (status in ('live','confirming','closed','void')),
   winner_user_id uuid references public.profiles(id),
   winner_bid_id uuid,
@@ -145,7 +145,7 @@ create table public.auction_templates (
   start_price integer not null check (start_price > 0),
   max_price integer check (max_price is null or max_price >= start_price),
   duration_min integer not null default 15,
-  confirm_window_min integer not null default 15,
+  confirm_window_min integer not null default 25,
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now()
 );
@@ -195,7 +195,7 @@ $$;
 -- 4) FUNCIONES SEGURAS (toda la lógica de negocio vive aquí) -------
 
 -- Crear subasta (solo admins) — starts_at es opcional: si no se da, empieza ya mismo
-create function public.create_auction(
+create or replace function public.create_auction(
   p_title text, p_description text, p_image_url text,
   p_start_price integer, p_duration_min integer, p_confirm_window_min integer,
   p_starts_at timestamptz default now(), p_max_price integer default null,
@@ -205,6 +205,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   v_is_admin boolean;
   v_id uuid;
+  v_commission numeric;
 begin
   select is_admin into v_is_admin from public.profiles where id = auth.uid();
   if not coalesce(v_is_admin, false) then
@@ -214,9 +215,11 @@ begin
     raise exception 'El precio máximo no puede ser menor al precio inicial';
   end if;
 
-  insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id)
+  select commission_percent into v_commission from public.site_settings where id = 1;
+
+  insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id, commission_percent)
   values (p_title, p_description, p_image_url, p_start_price, p_max_price, p_starts_at,
-          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0), p_category_id)
+          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0), p_category_id, coalesce(v_commission, 8))
   returning id into v_id;
 
   return v_id;
@@ -381,17 +384,19 @@ $$;
 -- Cerrar subasta y anunciar ganador (solo admin, cuando ya venció el tiempo)
 -- Crea automáticamente la siguiente subasta de una cadena repetitiva,
 -- si a la que se acaba de cerrar todavía le quedan repeticiones pendientes.
-create function public._maybe_chain_next(v_auction public.auctions)
+create or replace function public._maybe_chain_next(v_auction public.auctions)
 returns void
 language plpgsql security definer set search_path = public as $$
 declare
   v_duration interval;
+  v_commission numeric;
 begin
   if coalesce(v_auction.repeat_remaining, 0) > 0 then
     v_duration := v_auction.ends_at - v_auction.starts_at;
-    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id)
+    select commission_percent into v_commission from public.site_settings where id = 1;
+    insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id, commission_percent)
     values (v_auction.title, v_auction.description, v_auction.image_url, v_auction.start_price, v_auction.max_price,
-            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1, v_auction.category_id);
+            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1, v_auction.category_id, coalesce(v_commission, 8));
   end if;
 end;
 $$;
@@ -660,7 +665,11 @@ alter table public.auctions
   add column if not exists redeemed_at timestamptz,
   add column if not exists redeemed_by uuid references public.profiles(id);
 
-create or replace function public.mark_redeemed(p_auction_id uuid)
+-- Cómo se entregó el premio: a domicilio o recogido en el local
+alter table public.auctions
+  add column if not exists redeemed_via text check (redeemed_via in ('domicilio', 'local'));
+
+create or replace function public.mark_redeemed(p_auction_id uuid, p_redeemed_via text)
 returns void
 language plpgsql security definer set search_path = public as $$
 declare
@@ -669,6 +678,9 @@ declare
 begin
   select is_admin into v_is_admin from public.profiles where id = auth.uid();
   if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede marcar como redimida'; end if;
+  if p_redeemed_via not in ('domicilio', 'local') then
+    raise exception 'Debes indicar si fue domicilio o local';
+  end if;
 
   select * into v_auction from public.auctions where id = p_auction_id for update;
   if v_auction is null then raise exception 'Subasta no encontrada'; end if;
@@ -679,7 +691,7 @@ begin
     raise exception 'Esta subasta ya fue marcada como redimida';
   end if;
 
-  update public.auctions set redeemed_at = now(), redeemed_by = auth.uid() where id = p_auction_id;
+  update public.auctions set redeemed_at = now(), redeemed_by = auth.uid(), redeemed_via = p_redeemed_via where id = p_auction_id;
 
   -- Los 30 puntos por ganar se dan hasta que el premio se redime de verdad,
   -- no en el momento de ganar la subasta.
@@ -744,6 +756,36 @@ begin
   if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede borrar categorías'; end if;
   update public.auctions set category_id = null where category_id = p_category_id;
   delete from public.auction_categories where id = p_category_id;
+end;
+$$;
+
+-- ============================================================
+-- 10) COSTO DE ADMINISTRACIÓN: comisión (5%-10%, 8% por defecto) que se
+-- suma a la puja ganadora. Es un solo número global editable por el admin;
+-- cada subasta nueva "congela" el % activo al momento de crearse, así que
+-- cambiar el número global no afecta subastas ya publicadas.
+-- ============================================================
+
+alter table public.site_settings
+  add column if not exists commission_percent numeric not null default 8
+    check (commission_percent >= 5 and commission_percent <= 10);
+
+alter table public.auctions
+  add column if not exists commission_percent numeric not null default 8
+    check (commission_percent >= 0);
+
+-- Cambiar el % global de comisión (solo admin)
+create or replace function public.update_commission_percent(p_percent numeric)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare v_is_admin boolean;
+begin
+  select is_admin into v_is_admin from public.profiles where id = auth.uid();
+  if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede cambiar la comisión'; end if;
+  if p_percent < 5 or p_percent > 10 then
+    raise exception 'La comisión debe estar entre 5%% y 10%%';
+  end if;
+  update public.site_settings set commission_percent = p_percent, updated_at = now() where id = 1;
 end;
 $$;
 

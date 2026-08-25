@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import Countdown, { timeParts, useClockTick } from "../components/Countdown";
-import { fmtMoney, quickIncrements } from "../components/AuctionCard";
+import { fmtMoney, quickIncrements, totalWithCommission } from "../components/AuctionCard";
 import { waLink, waWinnerMessage, waGeneralMessage } from "../lib/whatsapp";
 import { Flame, Clock, Trophy, ShieldCheck, Users } from "lucide-react";
 
@@ -19,6 +19,7 @@ export default function AuctionDetail() {
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
+  const [unredeemedCount, setUnredeemedCount] = useState(0);
 
   const load = useCallback(async () => {
     const { data: a } = await supabase.from("auctions").select("*").eq("id", id).single();
@@ -45,6 +46,19 @@ export default function AuctionDetail() {
     return () => supabase.removeChannel(channel);
   }, [id, load]);
 
+  useEffect(() => {
+    if (!user) return setUnredeemedCount(0);
+    let active = true;
+    supabase
+      .from("auctions")
+      .select("id", { count: "exact", head: true })
+      .eq("winner_user_id", user.id)
+      .eq("status", "closed")
+      .is("redeemed_at", null)
+      .then(({ count }) => active && setUnredeemedCount(count || 0));
+    return () => { active = false; };
+  }, [user, auction?.status]);
+
   const rank = useMemo(
     () => [...bids].filter((b) => !b.voided).sort((a, b) => b.amount - a.amount || new Date(a.created_at) - new Date(b.created_at)),
     [bids]
@@ -59,6 +73,8 @@ export default function AuctionDetail() {
   const minIncrement = increments[0];
   const min = topBid ? topBid.amount + minIncrement : auction.start_price;
   const isWinner = (auction.status === "confirming" || auction.status === "closed") && auction.winner_user_id === user?.id;
+  const winAmount = topBid ? topBid.amount : auction.start_price;
+  const winTotal = totalWithCommission(winAmount, auction.commission_percent);
 
   async function placeBid(amt) {
     setError(""); setOk("");
@@ -143,28 +159,49 @@ export default function AuctionDetail() {
           <div>
             <Trophy size={24} color="var(--queso)" />
             <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "var(--texto-sobre-oscuro)", marginTop: 6 }}>
-              {profilesById[auction.winner_user_id] || "Ganador"} — {fmtMoney(topBid?.amount ?? auction.start_price)}
+              {profilesById[auction.winner_user_id] || "Ganador"} — {fmtMoney(winTotal)}
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--texto-sobre-oscuro)", opacity: 0.7, marginTop: 4 }}>
+              Puja {fmtMoney(winAmount)} + costo de administración ({auction.commission_percent}%)
             </div>
             <div style={{ fontSize: 12.5, color: "var(--texto-sobre-oscuro)", opacity: 0.7, marginTop: 4 }}>
               {auction.status === "confirming"
                 ? auction.winner_confirmed ? "Cupo confirmado, esperando cierre de MrFull" : "Esperando que el ganador confirme su cupo"
                 : "Subasta cerrada"}
             </div>
+            {auction.status === "confirming" && !auction.winner_confirmed && auction.confirm_deadline && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--queso)", fontSize: 12, fontWeight: 700, textTransform: "uppercase", marginTop: 8 }}>
+                <Clock size={14} /> Tiempo para confirmar: <Countdown endsAt={auction.confirm_deadline} />
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {isWinner && (
         <div className="card" style={{ marginTop: 14, background: "var(--queso-claro)" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, marginBottom: 8 }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, marginBottom: 4 }}>
             🎉 ¡Ganaste esta subasta!
           </div>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>
+            Puja: {fmtMoney(winAmount)} + costo de administración ({auction.commission_percent}%): {fmtMoney(winTotal - winAmount)}
+            <br />
+            <strong>Total a pagar: {fmtMoney(winTotal)}</strong>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {!auction.winner_confirmed && auction.confirm_deadline && (
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ladrillo)" }}>
+                ⏳ Tienes hasta <Countdown endsAt={auction.confirm_deadline} /> para confirmar, o el premio pasa al siguiente postor.
+              </div>
+            )}
             {!auction.winner_confirmed && (
               <button className="btn-primary" onClick={confirmWin} disabled={busy}>Confirmar mi cupo</button>
             )}
             <a
-              href={waLink(waWinnerMessage({ title: auction.title, amount: topBid ? topBid.amount : auction.start_price, fullName: profile?.full_name || "" }))}
+              href={waLink(waWinnerMessage({
+                title: auction.title, amount: winAmount, commissionPercent: auction.commission_percent,
+                total: winTotal, fullName: profile?.full_name || "",
+              }))}
               target="_blank" rel="noopener noreferrer"
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
@@ -184,6 +221,16 @@ export default function AuctionDetail() {
           {!user ? (
             <div style={{ fontSize: 13.5 }}>
               <Link to="/login" style={{ color: "var(--ladrillo)", fontWeight: 700 }}>Inicia sesión</Link> para poder pujar.
+            </div>
+          ) : unredeemedCount >= 3 ? (
+            <div style={{ fontSize: 13.5 }}>
+              🔒 Tienes <strong>{unredeemedCount} premios ganados sin redimir</strong>. Debes reclamar al menos uno antes de poder volver a pujar.
+              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                <Link to="/perfil" style={{ color: "var(--ladrillo)", fontWeight: 700 }}>Ver mis premios</Link>
+                <a href={waLink(waGeneralMessage())} target="_blank" rel="noopener noreferrer" style={{ color: "var(--ladrillo)", fontWeight: 700 }}>
+                  Escribir por WhatsApp
+                </a>
+              </div>
             </div>
           ) : (
             <>
@@ -254,6 +301,7 @@ export default function AuctionDetail() {
           <li>Gana quien tenga la puja más alta cuando cierre el tiempo.</li>
           <li>En caso de empate, gana quien pujó primero.</li>
           <li>El ganador tiene un tiempo límite para confirmar; si no confirma, pasa al siguiente postor.</li>
+          <li>Al ganar, se suma un costo de administración de {auction.commission_percent}% sobre tu puja.</li>
           <li>MrFull puede anular pujas sospechosas o de mala fe.</li>
         </ul>
       </div>

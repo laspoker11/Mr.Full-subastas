@@ -20,10 +20,13 @@ MrFull vende salchipapas y comida callejera en Barranquilla, Colombia. Hace suba
 - Programar subastas a futuro, y repetición automática (la siguiente se crea sola al cerrar la anterior, encadenada).
 - Automatización total con pg_cron: cada minuto revisa subastas vencidas y confirmaciones vencidas, sin intervención manual.
 - Sistema de puntos: +2 por participar en una subasta, +30 al redimir un premio ganado (no al momento de ganar). Máximo 3 premios ganados sin redimir por persona; si llega a ese límite no puede pujar en más subastas hasta redimir al menos uno. Página `/ranking` pública con tabla de posiciones y ganadores del día.
-- Panel Admin (`/admin`) con 3 pestañas: Subastas, Usuarios, Diseño.
+- Panel Admin (`/admin`) con 5 pestañas: Subastas, Por redimir, Reporte, Usuarios, Diseño.
 - Panel de Diseño: 3 temas visuales (Fuego Callejero, Noche Neón, Tropical Fresco) que cambian colores en vivo, más subida de logo e imagen de portada a Supabase Storage.
 - Botón de WhatsApp flotante permanente + mensaje automático al ganar una subasta, al número 3005276415.
 - Cancelar una subasta activa pide motivo, y queda registrado (no desaparece sin dejar rastro).
+- Costo de administración: comisión de 5%-10% (8% por defecto, ajustable en Panel Admin → Diseño) que se suma a la puja ganadora. Cada subasta "congela" el % vigente al crearse, así que cambiar el número global no afecta subastas ya publicadas.
+- Al redimir un premio, el admin elige si fue por domicilio o recogido en el local (se guarda por subasta).
+- Reporte financiero con filtro por rango de fechas (hoy / 7 días / mes / rango personalizado) y detalle agrupado por día o por mes.
 
 ## Cómo trabajar con el usuario dueño de este proyecto
 

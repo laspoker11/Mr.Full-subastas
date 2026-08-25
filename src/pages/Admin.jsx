@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import { timeParts, useClockTick } from "../components/Countdown";
-import { fmtMoney } from "../components/AuctionCard";
+import { fmtMoney, totalWithCommission } from "../components/AuctionCard";
 import { THEMES, applyTheme } from "../lib/themes";
 import { useSiteSettings } from "../lib/siteSettings";
 import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon, Package, BarChart3 } from "lucide-react";
@@ -35,7 +35,7 @@ function AdminDashboard() {
   const [bidsByAuction, setBidsByAuction] = useState({});
   const [profilesById, setProfilesById] = useState({});
   const [form, setForm] = useState({
-    title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 15,
+    title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 25,
     categoryId: "", newCategoryName: "",
     startMode: "now", // "now" | "scheduled"
     startAt: "", // datetime-local string
@@ -146,14 +146,14 @@ function AdminDashboard() {
     if (form.saveAsTemplate) {
       await supabase.rpc("save_template", {
         p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-        p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+        p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 25,
         p_max_price: maxPriceValue,
       });
     }
 
     const { error } = await supabase.rpc("create_auction", {
       p_title: form.title.trim(), p_description: form.description.trim(), p_image_url: form.imageUrl.trim(),
-      p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 15,
+      p_start_price: Number(form.startPrice), p_duration_min: durationMinTotal, p_confirm_window_min: Number(form.confirmWindowMin) || 25,
       p_starts_at: startsAtISO, p_max_price: maxPriceValue, p_repeat_remaining: Number(form.repeatAfterClose) || 0,
       p_category_id: form.categoryId || null,
     });
@@ -161,7 +161,7 @@ function AdminDashboard() {
     setSaving(false);
     if (error) return setFormError("Error al publicar: " + error.message);
     setForm({
-      title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 15,
+      title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 25,
       categoryId: "", newCategoryName: "",
       startMode: "now", startAt: "", saveAsTemplate: false, repeatAfterClose: 0,
     });
@@ -732,7 +732,7 @@ function UserDetailPanel({ user }) {
 }
 
 function AdminDesign() {
-  const { theme: activeTheme, logo_url, cover_image_url, refresh } = useSiteSettings();
+  const { theme: activeTheme, logo_url, cover_image_url, commission_percent, refresh } = useSiteSettings();
   const [selectedTheme, setSelectedTheme] = useState(activeTheme);
   const [logoUrl, setLogoUrl] = useState(logo_url || "");
   const [coverUrl, setCoverUrl] = useState(cover_image_url || "");
@@ -741,6 +741,25 @@ function AdminDesign() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadError, setUploadError] = useState("");
+
+  const [commission, setCommission] = useState(commission_percent ?? 8);
+  const [savingCommission, setSavingCommission] = useState(false);
+  const [commissionSaved, setCommissionSaved] = useState(false);
+  const [commissionError, setCommissionError] = useState("");
+
+  useEffect(() => { setCommission(commission_percent ?? 8); }, [commission_percent]);
+
+  async function saveCommission() {
+    setCommissionError(""); setCommissionSaved(false);
+    const value = Number(commission);
+    if (!value || value < 5 || value > 10) return setCommissionError("Debe ser un número entre 5 y 10.");
+    setSavingCommission(true);
+    const { error } = await supabase.rpc("update_commission_percent", { p_percent: value });
+    setSavingCommission(false);
+    if (error) return setCommissionError(error.message);
+    setCommissionSaved(true);
+    refresh();
+  }
 
   async function uploadImage(file, kind) {
     setUploadError("");
@@ -858,6 +877,29 @@ function AdminDesign() {
         {saving ? "Guardando..." : "Guardar diseño para todos"}
       </button>
       {saved && <div className="success-text">✅ Diseño guardado — ya lo ven todos tus usuarios.</div>}
+
+      <div className="card">
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+          Costo de administración
+        </div>
+        <div style={{ fontSize: 12.5, opacity: 0.65, marginBottom: 14 }}>
+          Porcentaje que se suma a la puja ganadora (entre 5% y 10%). Solo afecta subastas que publiques
+          después de guardar — las que ya están corriendo o cerradas no cambian.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            className="input" type="number" min={5} max={10} step={0.5}
+            value={commission} onChange={(e) => setCommission(e.target.value)}
+            style={{ maxWidth: 100 }}
+          />
+          <span style={{ fontWeight: 700 }}>%</span>
+          <button className="btn-primary" onClick={saveCommission} disabled={savingCommission}>
+            {savingCommission ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+        {commissionError && <div className="error-text" style={{ marginTop: 8 }}>{commissionError}</div>}
+        {commissionSaved && <div className="success-text" style={{ marginTop: 8 }}>✅ Comisión actualizada.</div>}
+      </div>
     </div>
   );
 }
@@ -885,9 +927,9 @@ function RedeemPanel({ auctions, bidsByAuction, profilesById, onChanged }) {
   const [busyId, setBusyId] = useState(null);
   const pending = auctions.filter((a) => a.status === "closed" && a.winner_user_id && !a.redeemed_at);
 
-  async function redeem(auctionId) {
+  async function redeem(auctionId, via) {
     setBusyId(auctionId);
-    const { error } = await supabase.rpc("mark_redeemed", { p_auction_id: auctionId });
+    const { error } = await supabase.rpc("mark_redeemed", { p_auction_id: auctionId, p_redeemed_via: via });
     setBusyId(null);
     if (error) return alert(error.message);
     onChanged();
@@ -915,6 +957,8 @@ function RedeemPanel({ auctions, bidsByAuction, profilesById, onChanged }) {
       {pending.map((a) => {
         const win = winningBid(a, bidsByAuction);
         const winner = profilesById[a.winner_user_id];
+        const amount = win?.amount ?? a.start_price;
+        const total = totalWithCommission(amount, a.commission_percent);
         return (
           <div key={a.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div>
@@ -927,12 +971,22 @@ function RedeemPanel({ auctions, bidsByAuction, profilesById, onChanged }) {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>
-                {fmtMoney(win?.amount ?? a.start_price)}
-              </span>
-              <button className="btn-primary" disabled={busyId === a.id} onClick={() => redeem(a.id)}>
-                {busyId === a.id ? "..." : "Marcar como redimida"}
-              </button>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 15, color: "var(--ladrillo)" }}>
+                  {fmtMoney(total)}
+                </div>
+                <div style={{ fontSize: 10.5, opacity: 0.55 }}>
+                  puja {fmtMoney(amount)} + {a.commission_percent}%
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <button className="btn-primary" disabled={busyId === a.id} onClick={() => redeem(a.id, "domicilio")} style={{ fontSize: 12.5, padding: "8px 12px" }}>
+                  {busyId === a.id ? "..." : "🛵 Domicilio"}
+                </button>
+                <button className="btn-primary" disabled={busyId === a.id} onClick={() => redeem(a.id, "local")} style={{ fontSize: 12.5, padding: "8px 12px" }}>
+                  {busyId === a.id ? "..." : "🏪 Recogió en el local"}
+                </button>
+              </div>
             </div>
           </div>
         );
@@ -941,17 +995,63 @@ function RedeemPanel({ auctions, bidsByAuction, profilesById, onChanged }) {
   );
 }
 
+const REPORT_PRESETS = [
+  { id: "hoy", label: "Hoy" },
+  { id: "semana", label: "Últimos 7 días" },
+  { id: "mes", label: "Este mes" },
+  { id: "todo", label: "Todo" },
+  { id: "custom", label: "Rango" },
+];
+
+function reportRange(preset, customFrom, customTo) {
+  const now = new Date();
+  if (preset === "hoy") {
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    return [start, now];
+  }
+  if (preset === "semana") {
+    const start = new Date(now); start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0);
+    return [start, now];
+  }
+  if (preset === "mes") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return [start, now];
+  }
+  if (preset === "custom") {
+    const start = customFrom ? new Date(customFrom + "T00:00:00") : null;
+    const end = customTo ? new Date(customTo + "T23:59:59") : now;
+    return [start, end];
+  }
+  return [null, now]; // "todo"
+}
+
 function ReportPanel({ auctions, bidsByAuction }) {
-  const soldAuctions = auctions.filter((a) => a.status === "closed" && a.winner_user_id);
+  const [preset, setPreset] = useState("mes");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [groupBy, setGroupBy] = useState("dia"); // "dia" | "mes"
+
+  const [rangeStart, rangeEnd] = reportRange(preset, customFrom, customTo);
+  const inRange = (a) => {
+    const t = new Date(a.starts_at);
+    return (!rangeStart || t >= rangeStart) && t <= rangeEnd;
+  };
+  const filtered = auctions.filter(inRange);
+
+  const soldAuctions = filtered.filter((a) => a.status === "closed" && a.winner_user_id);
   const redeemedAuctions = soldAuctions.filter((a) => a.redeemed_at);
-  const failedAuctions = auctions.filter((a) => a.status === "void" || (a.status === "closed" && !a.winner_user_id));
+  const failedAuctions = filtered.filter((a) => a.status === "void" || (a.status === "closed" && !a.winner_user_id));
 
   const amountOf = (a) => winningBid(a, bidsByAuction)?.amount ?? a.start_price;
+  const commissionOf = (a) => totalWithCommission(amountOf(a), a.commission_percent) - amountOf(a);
 
   const soldSum = soldAuctions.reduce((s, a) => s + amountOf(a), 0);
   const redeemedSum = redeemedAuctions.reduce((s, a) => s + amountOf(a), 0);
   const pendingSum = soldSum - redeemedSum;
   const pendingCount = soldAuctions.length - redeemedAuctions.length;
+  const commissionSum = redeemedAuctions.reduce((s, a) => s + commissionOf(a), 0);
+  const domicilioCount = redeemedAuctions.filter((a) => a.redeemed_via === "domicilio").length;
+  const localCount = redeemedAuctions.filter((a) => a.redeemed_via === "local").length;
 
   const failedWithBids = failedAuctions
     .map((a) => ({ auction: a, best: bestBidEver(a, bidsByAuction) }))
@@ -962,14 +1062,59 @@ function ReportPanel({ auctions, bidsByAuction }) {
     { label: "Vendidas", amount: soldSum, count: soldAuctions.length, color: "var(--salsa)" },
     { label: "Redimidas", amount: redeemedSum, count: redeemedAuctions.length, color: "var(--queso)" },
     { label: "Pendientes por redimir", amount: pendingSum, count: pendingCount, color: "var(--ladrillo)" },
+    { label: "Comisión cobrada", amount: commissionSum, count: redeemedAuctions.length, color: "#2e7d32" },
     { label: "Canceladas o vencidas", amount: failedSum, count: failedAuctions.length, color: "var(--alerta)" },
   ];
+
+  // Agrupa las vendidas por día o por mes, más reciente primero
+  const groups = {};
+  soldAuctions.forEach((a) => {
+    const d = new Date(a.starts_at);
+    const key = groupBy === "dia"
+      ? d.toLocaleDateString("es-CO", { year: "numeric", month: "2-digit", day: "2-digit" })
+      : d.toLocaleDateString("es-CO", { year: "numeric", month: "long" });
+    if (!groups[key]) groups[key] = { key, sortKey: groupBy === "dia" ? d.toISOString().slice(0, 10) : d.toISOString().slice(0, 7), count: 0, amount: 0, redeemedCount: 0, commission: 0 };
+    groups[key].count += 1;
+    groups[key].amount += amountOf(a);
+    if (a.redeemed_at) {
+      groups[key].redeemedCount += 1;
+      groups[key].commission += commissionOf(a);
+    }
+  });
+  const groupRows = Object.values(groups).sort((x, y) => y.sortKey.localeCompare(x.sortKey));
 
   return (
     <div>
       <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
         <BarChart3 size={16} /> Reporte financiero
       </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        {REPORT_PRESETS.map((p) => (
+          <button
+            key={p.id} onClick={() => setPreset(p.id)} className="pill"
+            style={{
+              border: "none", cursor: "pointer", fontSize: 12, padding: "6px 12px",
+              background: preset === p.id ? "var(--ladrillo)" : "var(--crema-suave)",
+              color: preset === p.id ? "white" : "var(--carbon)",
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {preset === "custom" && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, opacity: 0.7 }}>
+            Desde <input className="input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ marginLeft: 4 }} />
+          </label>
+          <label style={{ fontSize: 12, opacity: 0.7 }}>
+            Hasta <input className="input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ marginLeft: 4 }} />
+          </label>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         {cards.map((c) => (
           <div key={c.label} className="card" style={{ borderLeft: `4px solid ${c.color}` }}>
@@ -979,6 +1124,48 @@ function ReportPanel({ auctions, bidsByAuction }) {
           </div>
         ))}
       </div>
+
+      <div style={{ fontSize: 12, opacity: 0.65, marginTop: 10 }}>
+        De las redimidas: 🛵 {domicilioCount} a domicilio · 🏪 {localCount} recogidas en el local
+        {redeemedAuctions.length - domicilioCount - localCount > 0 ? ` · ${redeemedAuctions.length - domicilioCount - localCount} sin especificar (redimidas antes de este cambio)` : ""}
+      </div>
+
+      <div style={{ marginTop: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>Detalle</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[["dia", "Por día"], ["mes", "Por mes"]].map(([id, label]) => (
+            <button
+              key={id} onClick={() => setGroupBy(id)} className="pill"
+              style={{
+                border: "none", cursor: "pointer", fontSize: 11.5, padding: "5px 10px",
+                background: groupBy === id ? "var(--ladrillo)" : "var(--crema-suave)",
+                color: groupBy === id ? "white" : "var(--carbon)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {groupRows.length === 0 ? (
+        <div style={{ fontSize: 12.5, opacity: 0.6, marginTop: 8 }}>No hay subastas vendidas en este rango.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+          {groupRows.map((g) => (
+            <div key={g.key} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13, textTransform: "capitalize" }}>{g.key}</div>
+                <div style={{ fontSize: 11, opacity: 0.6 }}>{g.count} vendida{g.count === 1 ? "" : "s"} · {g.redeemedCount} redimida{g.redeemedCount === 1 ? "" : "s"}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 14 }}>{fmtMoney(g.amount)}</div>
+                <div style={{ fontSize: 10.5, opacity: 0.6 }}>comisión: {fmtMoney(g.commission)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

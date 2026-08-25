@@ -16,6 +16,11 @@ export function quickIncrements(startPrice) {
   return [10000, 20000];
 }
 
+// Total a pagar al ganar: la puja más el costo de administración de la subasta
+export function totalWithCommission(amount, commissionPercent) {
+  return Math.round(amount * (1 + (commissionPercent || 0) / 100));
+}
+
 export default function AuctionCard({ auction, topAmount }) {
   const { expired } = timeParts(auction.ends_at);
   const live = auction.status === "live" && !expired;
