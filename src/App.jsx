@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-route
 import { AuthProvider, useAuth } from "./lib/auth";
 import { SiteSettingsProvider } from "./lib/siteSettings";
 import { supabase } from "./supabaseClient";
+import { isRematazosDomain } from "./lib/domain";
 import NavBar from "./components/NavBar";
 import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
 import Login from "./pages/Login";
@@ -39,15 +40,6 @@ function Shell() {
     return () => sub.subscription.unsubscribe();
   }, [navigate]);
 
-  // Cuando el dominio rematazos.mrfull.online quede conectado a este mismo
-  // sitio (Cloudflare Pages sirve el mismo build en varios dominios), quien
-  // entre por ahí cae directo en /rematazos en vez de la página de subastas.
-  useEffect(() => {
-    if (window.location.hostname === "rematazos.mrfull.online" && window.location.pathname === "/") {
-      navigate("/rematazos", { replace: true });
-    }
-  }, [navigate]);
-
   return (
     <>
       <NavBar />
@@ -56,7 +48,10 @@ function Shell() {
         <Route path="/registro" element={<Register />} />
         <Route path="/olvide-password" element={<ForgotPassword />} />
         <Route path="/restablecer-password" element={<ResetPassword />} />
-        <Route path="/" element={<Cliente />} />
+        {/* rematazos.mrfull.online sirve el mismo build que subastas.mrfull.online
+            (Cloudflare Pages), así que "/" muestra una sección u otra según el
+            dominio por el que entraste — calculado una sola vez, no en un efecto. */}
+        <Route path="/" element={isRematazosDomain ? <Navigate to="/rematazos" replace /> : <Cliente />} />
         <Route path="/rematazos" element={<Rematazos />} />
         <Route path="/ranking" element={<Ranking />} />
         <Route path="/subasta/:id" element={<AuctionDetail />} />

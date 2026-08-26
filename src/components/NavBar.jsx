@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useSiteSettings } from "../lib/siteSettings";
 import { supabase } from "../supabaseClient";
+import { isRematazosDomain, SUBASTAS_HOSTNAME } from "../lib/domain";
 
 export default function NavBar() {
   const { user, profile, isAdmin, logout } = useAuth();
@@ -50,9 +51,17 @@ export default function NavBar() {
           <span style={{ fontSize: 11.5, color: "var(--texto-sobre-oscuro)", opacity: 0.75, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
             🟢 {onlineCount} en línea
           </span>
-          <Link to="/rematazos" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
-            ⚡ Rematazos
-          </Link>
+          {isRematazosDomain ? (
+            // Subastas vive en otro dominio — un Link normal de React Router
+            // no puede llevarte ahí, hace falta un link real de navegador.
+            <a href={`https://${SUBASTAS_HOSTNAME}`} style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
+              🔥 Subastas
+            </a>
+          ) : (
+            <Link to="/rematazos" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
+              ⚡ Rematazos
+            </Link>
+          )}
           {user && (
             <Link to="/ranking" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
               🏆 Ranking
