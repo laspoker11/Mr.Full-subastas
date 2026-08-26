@@ -24,7 +24,7 @@ export default function Rematazos() {
 
   const load = useCallback(async () => {
     const { data: r } = await supabase
-      .from("rematazos").select("*").neq("status", "cancelado")
+      .from("rematazos").select("*").neq("status", "cancelado").eq("hidden_public", false)
       .order("created_at", { ascending: false }).limit(60);
     setRematazos(r || []);
     const { data: c } = await supabase.from("rematazo_categories").select("*").order("name", { ascending: true });

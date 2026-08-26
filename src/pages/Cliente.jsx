@@ -17,6 +17,7 @@ export default function Cliente() {
       .from("auctions")
       .select("*")
       .neq("status", "void")
+      .eq("hidden_public", false)
       .order("starts_at", { ascending: false })
       .limit(30);
     if (error) { console.error(error); setLoading(false); return; }

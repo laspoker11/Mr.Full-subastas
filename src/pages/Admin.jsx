@@ -23,6 +23,14 @@ async function fetchProfilesWithPhones(userIds) {
   return map;
 }
 
+// Pide confirmación dos veces antes de una acción que el cliente ya no
+// podrá ver — usado para "quitar de la vista pública" subastas y rematazos.
+function confirmTwice(msg1, msg2) {
+  if (!window.confirm(msg1)) return false;
+  if (!window.confirm(msg2)) return false;
+  return true;
+}
+
 // Sube una imagen al bucket público "site-assets" bajo la ruta dada, con las
 // mismas reglas en todos lados (tipo imagen, máximo 5MB) — usado por el
 // formulario de subastas, el panel de Diseño y la creación de rematazos.
@@ -130,6 +138,14 @@ function AdminDashboard() {
     const { error } = await supabase.rpc("delete_template", { p_template_id: id });
     if (error) alert(error.message);
     load();
+  }
+
+  function hideAuctionFromPublic(id) {
+    if (!confirmTwice(
+      "¿Quitar esta subasta de la lista pública? Tus clientes ya no la van a ver ahí — tú la sigues viendo aquí en el historial.",
+      "¿Confirmas? Esto no se puede deshacer desde la app."
+    )) return;
+    supabase.rpc("hide_auction_public", { p_auction_id: id }).then(({ error }) => { if (error) alert(error.message); load(); });
   }
 
   async function uploadAuctionImage(file) {
@@ -418,11 +434,18 @@ function AdminDashboard() {
             {closedAuctions.slice(0, 15).map((a) => {
               const top = [...(bidsByAuction[a.id] || [])].filter((b) => !b.voided).sort((x, y) => y.amount - x.amount)[0];
               return (
-                <div key={a.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                  <span>{a.title}</span>
-                  <span style={{ opacity: 0.7 }}>
-                    {top ? `${profilesById[top.user_id]?.full_name || "..."} · ${profilesById[top.user_id]?.phone || ""} · ${fmtMoney(top.amount)}` : "Sin ganador"}
-                  </span>
+                <div key={a.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <span>{a.title}{a.hidden_public && <span className="pill" style={{ background: "#ddd", color: "var(--carbon)", marginLeft: 6, fontSize: 9.5 }}>OCULTA DEL PÚBLICO</span>}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ opacity: 0.7 }}>
+                      {top ? `${profilesById[top.user_id]?.full_name || "..."} · ${profilesById[top.user_id]?.phone || ""} · ${fmtMoney(top.amount)}` : "Sin ganador"}
+                    </span>
+                    {!a.hidden_public && (
+                      <button className="btn-ghost" style={{ fontSize: 10.5, padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => hideAuctionFromPublic(a.id)}>
+                        Quitar de público
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -441,15 +464,22 @@ function AdminDashboard() {
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {cancelledAuctions.slice(0, 15).map((a) => (
               <div key={a.id} className="card" style={{ padding: "10px 14px", fontSize: 12.5, borderColor: "var(--alerta)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontWeight: 700 }}>{a.title}</span>
-                  <span style={{ opacity: 0.6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>{a.title}{a.hidden_public && <span className="pill" style={{ background: "#ddd", color: "var(--carbon)", marginLeft: 6, fontSize: 9.5 }}>OCULTA</span>}</span>
+                  <span style={{ opacity: 0.6, whiteSpace: "nowrap" }}>
                     {a.cancelled_at && new Date(a.cancelled_at).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
                   </span>
                 </div>
-                <div style={{ opacity: 0.75, marginTop: 2 }}>
-                  Motivo: {a.cancel_reason || "(sin motivo especificado)"}
-                  {a.cancelled_by && ` — canceló ${profilesById[a.cancelled_by]?.full_name || "..."}`}
+                <div style={{ opacity: 0.75, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span>
+                    Motivo: {a.cancel_reason || "(sin motivo especificado)"}
+                    {a.cancelled_by && ` — canceló ${profilesById[a.cancelled_by]?.full_name || "..."}`}
+                  </span>
+                  {!a.hidden_public && (
+                    <button className="btn-ghost" style={{ fontSize: 10.5, padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => hideAuctionFromPublic(a.id)}>
+                      Quitar de público
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -1455,6 +1485,14 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
     });
   }
 
+  function hideFromPublic(id) {
+    if (!confirmTwice(
+      "¿Quitar este rematazo de la lista pública? Tus clientes ya no lo van a ver ahí — tú lo sigues viendo aquí en el historial.",
+      "¿Confirmas? Esto no se puede deshacer desde la app."
+    )) return;
+    supabase.rpc("hide_rematazo_public", { p_rematazo_id: id }).then(({ error }) => { if (error) alert(error.message); onChanged(); });
+  }
+
   const activos = rematazos.filter((r) => r.status === "activo");
   const cerrados = rematazos.filter((r) => r.status === "cerrado");
   const cancelados = rematazos.filter((r) => r.status === "cancelado");
@@ -1577,9 +1615,16 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, opacity: 0.7 }}>Cerrados ({cerrados.length})</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {cerrados.slice(0, 15).map((r) => (
-              <div key={r.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                <span>{r.title}</span>
-                <span style={{ opacity: 0.7 }}>{r.cupos_usados} inscritos · {fmtMoney(r.price)}</span>
+              <div key={r.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <span>{r.title}{r.hidden_public && <span className="pill" style={{ background: "#ddd", color: "var(--carbon)", marginLeft: 6, fontSize: 9.5 }}>OCULTO</span>}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ opacity: 0.7, whiteSpace: "nowrap" }}>{r.cupos_usados} inscritos · {fmtMoney(r.price)}</span>
+                  {!r.hidden_public && (
+                    <button className="btn-ghost" style={{ fontSize: 10.5, padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => hideFromPublic(r.id)}>
+                      Quitar de público
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -1594,8 +1639,15 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {cancelados.slice(0, 15).map((r) => (
               <div key={r.id} className="card" style={{ padding: "10px 14px", fontSize: 12.5, borderColor: "var(--alerta)" }}>
-                <div style={{ fontWeight: 700 }}>{r.title}</div>
-                <div style={{ opacity: 0.75, marginTop: 2 }}>Motivo: {r.cancel_reason || "(sin motivo especificado)"}</div>
+                <div style={{ fontWeight: 700 }}>{r.title}{r.hidden_public && <span className="pill" style={{ background: "#ddd", color: "var(--carbon)", marginLeft: 6, fontSize: 9.5 }}>OCULTO</span>}</div>
+                <div style={{ opacity: 0.75, marginTop: 2, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span>Motivo: {r.cancel_reason || "(sin motivo especificado)"}</span>
+                  {!r.hidden_public && (
+                    <button className="btn-ghost" style={{ fontSize: 10.5, padding: "4px 8px", whiteSpace: "nowrap" }} onClick={() => hideFromPublic(r.id)}>
+                      Quitar de público
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
