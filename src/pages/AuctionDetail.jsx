@@ -162,7 +162,9 @@ export default function AuctionDetail() {
               {profilesById[auction.winner_user_id] || "Ganador"} — {fmtMoney(winTotal)}
             </div>
             <div style={{ fontSize: 12.5, color: "var(--texto-sobre-oscuro)", opacity: 0.7, marginTop: 4 }}>
-              Puja {fmtMoney(winAmount)} + costo de administración ({auction.commission_percent}%)
+              {auction.commission_percent > 0
+                ? `Puja ${fmtMoney(winAmount)} + costo de administración (${auction.commission_percent}%)`
+                : `Puja ${fmtMoney(winAmount)} · sin costo de administración`}
             </div>
             <div style={{ fontSize: 12.5, color: "var(--texto-sobre-oscuro)", opacity: 0.7, marginTop: 4 }}>
               {auction.status === "confirming"
@@ -184,8 +186,11 @@ export default function AuctionDetail() {
             🎉 ¡Ganaste esta subasta!
           </div>
           <div style={{ fontSize: 13, marginBottom: 8 }}>
-            Puja: {fmtMoney(winAmount)} + costo de administración ({auction.commission_percent}%): {fmtMoney(winTotal - winAmount)}
-            <br />
+            {auction.commission_percent > 0 ? (
+              <>Puja: {fmtMoney(winAmount)} + costo de administración ({auction.commission_percent}%): {fmtMoney(winTotal - winAmount)}<br /></>
+            ) : (
+              <>Puja: {fmtMoney(winAmount)} · sin costo de administración<br /></>
+            )}
             <strong>Total a pagar: {fmtMoney(winTotal)}</strong>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -304,7 +309,9 @@ export default function AuctionDetail() {
           <li>Gana quien tenga la puja más alta cuando cierre el tiempo.</li>
           <li>En caso de empate, gana quien pujó primero.</li>
           <li>El ganador tiene un tiempo límite para confirmar; si no confirma, pasa al siguiente postor.</li>
-          <li>Al ganar, se suma un costo de administración de {auction.commission_percent}% sobre tu puja.</li>
+          {auction.commission_percent > 0 && (
+            <li>Al ganar, se suma un costo de administración de {auction.commission_percent}% sobre tu puja.</li>
+          )}
           <li>MrFull puede anular pujas sospechosas o de mala fe.</li>
         </ul>
       </div>

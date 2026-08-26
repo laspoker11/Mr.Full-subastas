@@ -216,11 +216,12 @@ begin
     raise exception 'El precio máximo no puede ser menor al precio inicial';
   end if;
 
-  select commission_percent into v_commission from public.site_settings where id = 1;
+  select case when commission_enabled then commission_percent else 0 end into v_commission
+    from public.site_settings where id = 1;
 
   insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id, commission_percent)
   values (p_title, p_description, p_image_url, p_start_price, p_max_price, p_starts_at,
-          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0), p_category_id, coalesce(v_commission, 8))
+          p_starts_at + (p_duration_min || ' minutes')::interval, p_confirm_window_min, auth.uid(), coalesce(p_repeat_remaining, 0), p_category_id, coalesce(v_commission, 0))
   returning id into v_id;
 
   return v_id;
@@ -394,10 +395,11 @@ declare
 begin
   if coalesce(v_auction.repeat_remaining, 0) > 0 then
     v_duration := v_auction.ends_at - v_auction.starts_at;
-    select commission_percent into v_commission from public.site_settings where id = 1;
+    select case when commission_enabled then commission_percent else 0 end into v_commission
+      from public.site_settings where id = 1;
     insert into public.auctions (title, description, image_url, start_price, max_price, starts_at, ends_at, confirm_window_min, created_by, repeat_remaining, category_id, commission_percent)
     values (v_auction.title, v_auction.description, v_auction.image_url, v_auction.start_price, v_auction.max_price,
-            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1, v_auction.category_id, coalesce(v_commission, 8));
+            now(), now() + v_duration, v_auction.confirm_window_min, v_auction.created_by, v_auction.repeat_remaining - 1, v_auction.category_id, coalesce(v_commission, 0));
   end if;
 end;
 $$;
@@ -797,8 +799,13 @@ alter table public.auctions
   add column if not exists commission_percent numeric not null default 8
     check (commission_percent >= 0);
 
--- Cambiar el % global de comisión (solo admin)
-create or replace function public.update_commission_percent(p_percent numeric)
+-- Interruptor para prender/apagar el cobro por completo. Mientras está
+-- apagado, las subastas nuevas congelan 0% (no cobran nada), aunque el %
+-- configurado quede guardado listo para cuando lo vuelvas a activar.
+alter table public.site_settings add column if not exists commission_enabled boolean not null default true;
+
+-- Cambiar el % global de comisión y si está activo o no (solo admin)
+create or replace function public.update_commission_percent(p_percent numeric, p_enabled boolean)
 returns void
 language plpgsql security definer set search_path = public as $$
 declare v_is_admin boolean;
@@ -808,7 +815,7 @@ begin
   if p_percent < 5 or p_percent > 10 then
     raise exception 'La comisión debe estar entre 5%% y 10%%';
   end if;
-  update public.site_settings set commission_percent = p_percent, updated_at = now() where id = 1;
+  update public.site_settings set commission_percent = p_percent, commission_enabled = p_enabled, updated_at = now() where id = 1;
 end;
 $$;
 

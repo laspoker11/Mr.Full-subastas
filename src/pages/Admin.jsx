@@ -806,7 +806,7 @@ function UserDetailPanel({ user }) {
 
 function AdminDesign() {
   const {
-    theme: activeTheme, logo_url, cover_image_url, commission_percent,
+    theme: activeTheme, logo_url, cover_image_url, commission_percent, commission_enabled,
     perfil_show_subastas, perfil_show_rematazos, perfil_show_ranking, perfil_show_historial, perfil_show_direcciones,
     refresh,
   } = useSiteSettings();
@@ -821,11 +821,13 @@ function AdminDesign() {
   const [justSavedKind, setJustSavedKind] = useState(""); // "logo" | "cover" | ""
 
   const [commission, setCommission] = useState(commission_percent ?? 8);
+  const [commissionEnabled, setCommissionEnabled] = useState(commission_enabled ?? true);
   const [savingCommission, setSavingCommission] = useState(false);
   const [commissionSaved, setCommissionSaved] = useState(false);
   const [commissionError, setCommissionError] = useState("");
 
   useEffect(() => { setCommission(commission_percent ?? 8); }, [commission_percent]);
+  useEffect(() => { setCommissionEnabled(commission_enabled ?? true); }, [commission_enabled]);
 
   const [vis, setVis] = useState({
     subastas: perfil_show_subastas, rematazos: perfil_show_rematazos, ranking: perfil_show_ranking,
@@ -858,7 +860,7 @@ function AdminDesign() {
     const value = Number(commission);
     if (!value || value < 5 || value > 10) return setCommissionError("Debe ser un número entre 5 y 10.");
     setSavingCommission(true);
-    const { error } = await supabase.rpc("update_commission_percent", { p_percent: value });
+    const { error } = await supabase.rpc("update_commission_percent", { p_percent: value, p_enabled: commissionEnabled });
     setSavingCommission(false);
     if (error) return setCommissionError(error.message);
     setCommissionSaved(true);
@@ -1004,11 +1006,20 @@ function AdminDesign() {
           Porcentaje que se suma a la puja ganadora (entre 5% y 10%). Solo afecta subastas que publiques
           después de guardar — las que ya están corriendo o cerradas no cambian.
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, marginBottom: 12, fontWeight: 700 }}>
+          <input type="checkbox" checked={commissionEnabled} onChange={(e) => setCommissionEnabled(e.target.checked)} />
+          Cobrar costo de administración
+        </label>
+        <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 10 }}>
+          {commissionEnabled
+            ? "Activo: las subastas nuevas cobran el % de abajo."
+            : "Apagado: las subastas nuevas no cobran nada — el % de abajo queda guardado para cuando lo actives."}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <input
             className="input" type="number" min={5} max={10} step={0.5}
             value={commission} onChange={(e) => setCommission(e.target.value)}
-            style={{ maxWidth: 100 }}
+            style={{ maxWidth: 100, opacity: commissionEnabled ? 1 : 0.5 }}
           />
           <span style={{ fontWeight: 700 }}>%</span>
           <button className="btn-primary" onClick={saveCommission} disabled={savingCommission}>
