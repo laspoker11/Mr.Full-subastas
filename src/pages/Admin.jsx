@@ -818,6 +818,7 @@ function AdminDesign() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [justSavedKind, setJustSavedKind] = useState(""); // "logo" | "cover" | ""
 
   const [commission, setCommission] = useState(commission_percent ?? 8);
   const [savingCommission, setSavingCommission] = useState(false);
@@ -870,11 +871,18 @@ function AdminDesign() {
 
     const setUploading = kind === "logo" ? setUploadingLogo : setUploadingCover;
     setUploading(true);
+    setJustSavedKind("");
     try {
       const ext = file.name.split(".").pop();
       const url = await uploadSiteAsset(file, `${kind}-${Date.now()}.${ext}`);
       if (kind === "logo") setLogoUrl(url);
       else setCoverUrl(url);
+      // Guarda de una vez — así no hace falta un segundo clic en "Guardar" para
+      // que la foto recién subida quede puesta de verdad (se ve igual en
+      // subastas.mrfull.online y en rematazos.mrfull.online, es la misma).
+      await saveSettings(kind === "logo" ? { logo: url } : { cover: url });
+      setSaved(true);
+      setJustSavedKind(kind);
     } catch (err) {
       setUploadError(err.message);
     } finally {
@@ -888,15 +896,23 @@ function AdminDesign() {
     return () => applyTheme(activeTheme); // si sales sin guardar, vuelve al tema real
   }, [selectedTheme, activeTheme]);
 
+  async function saveSettings({ theme = selectedTheme, logo = logoUrl, cover = coverUrl } = {}) {
+    const { error } = await supabase.rpc("update_site_settings", {
+      p_theme: theme, p_logo_url: logo.trim(), p_cover_image_url: cover.trim(),
+    });
+    if (error) throw new Error(error.message);
+    refresh();
+  }
+
   async function save() {
     setSaving(true); setSaved(false);
-    const { error } = await supabase.rpc("update_site_settings", {
-      p_theme: selectedTheme, p_logo_url: logoUrl.trim(), p_cover_image_url: coverUrl.trim(),
-    });
+    try {
+      await saveSettings();
+      setSaved(true);
+    } catch (err) {
+      alert(err.message);
+    }
     setSaving(false);
-    if (error) return alert(error.message);
-    setSaved(true);
-    refresh();
   }
 
   return (
@@ -951,6 +967,7 @@ function AdminDesign() {
                 <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingLogo}
                   onChange={(e) => uploadImage(e.target.files[0], "logo")} />
               </label>
+              {justSavedKind === "logo" && <span className="success-text" style={{ margin: 0 }}>✅ Guardado</span>}
             </div>
             <input className="input" placeholder="...o pega un link directo a una imagen" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} style={{ marginTop: 8 }} />
           </div>
@@ -963,12 +980,13 @@ function AdminDesign() {
               <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingCover}
                 onChange={(e) => uploadImage(e.target.files[0], "cover")} />
             </label>
+            {justSavedKind === "cover" && <span className="success-text" style={{ margin: "0 0 0 8px" }}>✅ Guardado</span>}
             <input className="input" placeholder="...o pega un link directo a una imagen" value={coverUrl} onChange={(e) => setCoverUrl(e.target.value)} style={{ marginTop: 8 }} />
           </div>
 
           {uploadError && <div className="error-text">{uploadError}</div>}
           <div style={{ fontSize: 11, opacity: 0.5 }}>
-            Máximo 5 MB por imagen. También puedes pegar un link si ya tienes la imagen alojada en otro lado (Facebook, Google Drive público, Imgur, etc).
+            Máximo 5 MB por imagen. Al subir un archivo se guarda solo, de una vez. Si en cambio pegas un link, tiene que ser la dirección directa del archivo de imagen (que termine en .jpg, .png, etc.) — un link a una publicación de Facebook o a la página de Google Drive no funciona, tiene que ser el link "directo" a la imagen.
           </div>
         </div>
       </div>
