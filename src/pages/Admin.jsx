@@ -71,6 +71,7 @@ function AdminDashboard() {
   const [rematazos, setRematazos] = useState([]);
   const [rematazoCategories, setRematazoCategories] = useState([]);
   const [rematazoSignups, setRematazoSignups] = useState([]);
+  const [rematazoTemplates, setRematazoTemplates] = useState([]);
   const [form, setForm] = useState({
     title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 25,
     categoryId: "", newCategoryName: "",
@@ -105,6 +106,8 @@ function AdminDashboard() {
     setRematazoCategories(remCats || []);
     const { data: remSignups } = await supabase.from("rematazo_signups").select("*").order("created_at", { ascending: false });
     setRematazoSignups(remSignups || []);
+    const { data: remTemplates } = await supabase.from("rematazo_templates").select("*").order("created_at", { ascending: false });
+    setRematazoTemplates(remTemplates || []);
 
     const userIds = [...new Set([
       ...(b || []).map((x) => x.user_id),
@@ -122,6 +125,7 @@ function AdminDashboard() {
       .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, load)
       .on("postgres_changes", { event: "*", schema: "public", table: "rematazos" }, load)
       .on("postgres_changes", { event: "*", schema: "public", table: "rematazo_signups" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rematazo_templates" }, load)
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [load]);
@@ -249,7 +253,7 @@ function AdminDashboard() {
       ) : tab === "redimir" ? (
         <RedeemPanel auctions={auctions} bidsByAuction={bidsByAuction} profilesById={profilesById} onChanged={load} />
       ) : tab === "rematazos" ? (
-        <RematazoAdminPanel rematazos={rematazos} categories={rematazoCategories} onChanged={load} />
+        <RematazoAdminPanel rematazos={rematazos} categories={rematazoCategories} templates={rematazoTemplates} onChanged={load} />
       ) : tab === "inscritos-rematazos" ? (
         <RematazoSignupsPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} onChanged={load} />
       ) : tab === "ventas-rematazos" ? (
@@ -297,7 +301,7 @@ function AdminDashboard() {
                 onChange={(e) => uploadAuctionImage(e.target.files[0])}
               />
             </label>
-            <ImageGalleryPicker onSelect={(url) => setForm((f) => ({ ...f, imageUrl: url }))} />
+            <ImageGalleryPicker folder="auctions" label="subastas" onSelect={(url) => setForm((f) => ({ ...f, imageUrl: url }))} />
           </div>
 
           <div>
@@ -1296,16 +1300,17 @@ function ReportPanel({ auctions, bidsByAuction }) {
   );
 }
 
-// Botón que abre una cuadrícula con las imágenes ya subidas a la carpeta
-// "auctions/" del bucket site-assets, para reusarlas sin subirlas de nuevo.
-function ImageGalleryPicker({ onSelect }) {
+// Botón que abre una cuadrícula con las imágenes ya subidas a una carpeta
+// del bucket site-assets, para reusarlas sin subirlas de nuevo. Sirve tanto
+// para subastas ("auctions") como para rematazos ("rematazos").
+function ImageGalleryPicker({ folder, label, onSelect }) {
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
 
   async function loadFiles() {
     setLoading(true);
-    const { data, error } = await supabase.storage.from("site-assets").list("auctions", {
+    const { data, error } = await supabase.storage.from("site-assets").list(folder, {
       limit: 100, sortBy: { column: "created_at", order: "desc" },
     });
     setLoading(false);
@@ -1319,13 +1324,13 @@ function ImageGalleryPicker({ onSelect }) {
   }
 
   function publicUrlFor(name) {
-    const { data } = supabase.storage.from("site-assets").getPublicUrl(`auctions/${name}`);
+    const { data } = supabase.storage.from("site-assets").getPublicUrl(`${folder}/${name}`);
     return data.publicUrl;
   }
 
   async function deleteFile(name) {
     if (!confirm("¿Borrar esta imagen de la galería? Esto no se puede deshacer.")) return;
-    const { error } = await supabase.storage.from("site-assets").remove([`auctions/${name}`]);
+    const { error } = await supabase.storage.from("site-assets").remove([`${folder}/${name}`]);
     if (error) return alert(error.message);
     loadFiles();
   }
@@ -1349,7 +1354,7 @@ function ImageGalleryPicker({ onSelect }) {
               <div style={{ textAlign: "center", padding: 30, opacity: 0.6 }}>Cargando...</div>
             ) : files.length === 0 ? (
               <div style={{ textAlign: "center", padding: 30, opacity: 0.6, fontSize: 13 }}>
-                Todavía no has subido ninguna imagen de subastas.
+                Todavía no has subido ninguna imagen de {label || "este tipo"}.
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
@@ -1390,11 +1395,11 @@ function emptyRematazoDraft() {
   return {
     title: "", description: "", imageUrl: "", categoryId: "",
     price: 9900, oldPrice: "", entregaModo: "mixto", limiteTipo: "ambos",
-    cuposMax: 50, durationValue: 45, durationUnit: "min",
+    cuposMax: 50, durationValue: 45, durationUnit: "min", saveAsTemplate: false,
   };
 }
 
-function RematazoAdminPanel({ rematazos, categories, onChanged }) {
+function RematazoAdminPanel({ rematazos, categories, templates, onChanged }) {
   const [batch, setBatch] = useState([emptyRematazoDraft()]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -1442,6 +1447,22 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
     onChanged();
   }
 
+  function useTemplate(t) {
+    updateDraft({
+      title: t.title, description: t.description || "", imageUrl: t.image_url || "",
+      categoryId: t.category_id || "", price: t.price, oldPrice: t.old_price ?? "",
+      entregaModo: t.entrega_modo, limiteTipo: t.limite_tipo,
+      cuposMax: t.cupos_max ?? 50, durationValue: t.duracion_min ?? 45, durationUnit: "min",
+    });
+  }
+
+  async function deleteTemplate(id) {
+    if (!confirm("¿Borrar esta plantilla?")) return;
+    const { error } = await supabase.rpc("delete_rematazo_template", { p_template_id: id });
+    if (error) alert(error.message);
+    onChanged();
+  }
+
   function validateDraft(d) {
     if (!d.title.trim()) return "Ponle un nombre al producto.";
     if (!d.price || Number(d.price) <= 0) return "El precio debe ser mayor a 0.";
@@ -1460,12 +1481,21 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
     for (const d of batch) {
       const unit = DURATION_UNITS[d.durationUnit];
       const durationMin = d.limiteTipo !== "cantidad" ? Number(d.durationValue) * unit.toMinutes : null;
+      const cuposMax = d.limiteTipo !== "tiempo" ? Number(d.cuposMax) : null;
+
+      if (d.saveAsTemplate) {
+        await supabase.rpc("save_rematazo_template", {
+          p_title: d.title.trim(), p_price: Number(d.price), p_entrega_modo: d.entregaModo, p_limite_tipo: d.limiteTipo,
+          p_description: d.description.trim(), p_image_url: d.imageUrl, p_category_id: d.categoryId || null,
+          p_old_price: d.oldPrice === "" ? null : Number(d.oldPrice), p_cupos_max: cuposMax, p_duracion_min: durationMin,
+        });
+      }
+
       const { error } = await supabase.rpc("create_rematazo", {
         p_title: d.title.trim(), p_price: Number(d.price), p_entrega_modo: d.entregaModo, p_limite_tipo: d.limiteTipo,
         p_description: d.description.trim(), p_image_url: d.imageUrl, p_category_id: d.categoryId || null,
         p_old_price: d.oldPrice === "" ? null : Number(d.oldPrice),
-        p_cupos_max: d.limiteTipo !== "tiempo" ? Number(d.cuposMax) : null,
-        p_duracion_min: durationMin,
+        p_cupos_max: cuposMax, p_duracion_min: durationMin,
       });
       if (error) { setSaving(false); return setFormError(`"${d.title}": ${error.message}`); }
     }
@@ -1507,6 +1537,24 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
           Agrega varios productos y publícalos todos juntos.
         </div>
 
+        {templates.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.6, marginBottom: 6 }}>PLANTILLAS GUARDADAS</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {templates.map((t) => (
+                <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--crema-suave)", borderRadius: 20, padding: "4px 6px 4px 12px" }}>
+                  <button onClick={() => useTemplate(t)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
+                    {t.title} · {fmtMoney(t.price)}
+                  </button>
+                  <button onClick={() => deleteTemplate(t.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--alerta)", display: "flex" }}>
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
           {batch.map((d, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, background: i === selectedIdx ? "var(--queso-claro)" : "var(--crema-suave)", borderRadius: 20, padding: "4px 6px 4px 12px" }}>
@@ -1535,6 +1583,7 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
               {uploadingPhoto ? "Subiendo..." : "📤 Subir foto"}
               <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingPhoto} onChange={(e) => uploadPhoto(e.target.files[0])} />
             </label>
+            <ImageGalleryPicker folder="rematazos" label="rematazos" onSelect={(url) => updateDraft({ imageUrl: url })} />
           </div>
 
           <div>
@@ -1580,6 +1629,11 @@ function RematazoAdminPanel({ rematazos, categories, onChanged }) {
           {draft.limiteTipo !== "cantidad" && (
             <DurationInput value={draft.durationValue} unit={draft.durationUnit} onChange={(v, u) => updateDraft({ durationValue: v, durationUnit: u })} />
           )}
+
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginTop: 2 }}>
+            <input type="checkbox" checked={draft.saveAsTemplate} onChange={(e) => updateDraft({ saveAsTemplate: e.target.checked })} />
+            Guardar "{draft.title || "este rematazo"}" como plantilla (para reusar después)
+          </label>
 
           <button className="btn-primary" onClick={publishBatch} disabled={saving} style={{ marginTop: 4 }}>
             {saving ? "Publicando..." : `Publicar lote (${batch.length})`}
