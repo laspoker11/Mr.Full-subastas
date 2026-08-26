@@ -39,11 +39,11 @@ export default function NavBar() {
             <img src={logo_url} alt="Logo" style={{ width: 34, height: 34, borderRadius: 10, objectFit: "cover" }} />
           ) : (
             <div style={{ background: "var(--ladrillo)", borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>
-              🔥
+              {isRematazosDomain ? "⚡" : "🔥"}
             </div>
           )}
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 19, color: "var(--crema-suave)" }}>
-            Subastas MrFull
+            {isRematazosDomain ? "Rematazos MrFull" : "Subastas MrFull"}
           </span>
         </Link>
 

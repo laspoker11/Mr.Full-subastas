@@ -27,6 +27,10 @@ function RequireAuth({ children }) {
 function Shell() {
   const navigate = useNavigate();
 
+  useEffect(() => {
+    document.title = isRematazosDomain ? "Rematazos MrFull" : "Subastas MrFull";
+  }, []);
+
   // Seguro: si el enlace de "recuperar contraseña" del correo aterriza en
   // cualquier otra página (por configuración de Supabase), lo mandamos a la
   // pantalla de nueva contraseña de todos modos, para no dejar al usuario
