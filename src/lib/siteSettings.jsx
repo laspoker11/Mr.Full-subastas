@@ -5,7 +5,11 @@ import { applyTheme } from "./themes";
 const SiteSettingsContext = createContext(null);
 
 export function SiteSettingsProvider({ children }) {
-  const [settings, setSettings] = useState({ theme: "fuego", logo_url: "", cover_image_url: "", commission_percent: 8 });
+  const [settings, setSettings] = useState({
+    theme: "fuego", logo_url: "", cover_image_url: "", commission_percent: 8,
+    perfil_show_subastas: true, perfil_show_rematazos: true, perfil_show_ranking: true,
+    perfil_show_historial: false, perfil_show_direcciones: false,
+  });
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {

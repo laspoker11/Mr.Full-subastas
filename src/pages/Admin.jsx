@@ -1,13 +1,39 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney, totalWithCommission } from "../components/AuctionCard";
 import { THEMES, applyTheme } from "../lib/themes";
 import { useSiteSettings } from "../lib/siteSettings";
-import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon, Package, BarChart3 } from "lucide-react";
+import { Plus, X, Check, RefreshCw, AlertTriangle, Clock3, Image as ImageIcon, Package, BarChart3, Zap, Users } from "lucide-react";
 
 const DURATION_UNITS = { min: { label: "Minutos", minValue: 15, toMinutes: 1 }, hora: { label: "Horas", minValue: 1, toMinutes: 60 }, dia: { label: "Días", minValue: 1, toMinutes: 1440 } };
+
+// Dado un lote de user_id, trae nombre + celular de cada uno en 2 consultas
+// (perfiles públicos + contact_info privado) — usado por cualquier pestaña
+// que necesite mostrar "quién es" detrás de una fila (pujas, inscripciones, ventas).
+async function fetchProfilesWithPhones(userIds) {
+  if (!userIds.length) return {};
+  const { data: profs } = await supabase.from("profiles").select("id, full_name").in("id", userIds);
+  const { data: contacts } = await supabase.from("contact_info").select("id, phone").in("id", userIds);
+  const phoneById = {};
+  (contacts || []).forEach((c) => (phoneById[c.id] = c.phone));
+  const map = {};
+  (profs || []).forEach((p) => (map[p.id] = { full_name: p.full_name, phone: phoneById[p.id] || "" }));
+  return map;
+}
+
+// Sube una imagen al bucket público "site-assets" bajo la ruta dada, con las
+// mismas reglas en todos lados (tipo imagen, máximo 5MB) — usado por el
+// formulario de subastas, el panel de Diseño y la creación de rematazos.
+async function uploadSiteAsset(file, path) {
+  if (!file.type.startsWith("image/")) throw new Error("Ese archivo no es una imagen.");
+  if (file.size > 5 * 1024 * 1024) throw new Error("La imagen no puede pesar más de 5 MB.");
+  const { error } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
+  if (error) throw new Error("No se pudo subir la imagen: " + error.message);
+  const { data } = supabase.storage.from("site-assets").getPublicUrl(path);
+  return data.publicUrl;
+}
 
 export default function Admin() {
   const { isAdmin, loading } = useAuth();
@@ -34,6 +60,9 @@ function AdminDashboard() {
   const [categories, setCategories] = useState([]);
   const [bidsByAuction, setBidsByAuction] = useState({});
   const [profilesById, setProfilesById] = useState({});
+  const [rematazos, setRematazos] = useState([]);
+  const [rematazoCategories, setRematazoCategories] = useState([]);
+  const [rematazoSignups, setRematazoSignups] = useState([]);
   const [form, setForm] = useState({
     title: "", description: "", imageUrl: "", startPrice: 25000, maxPrice: "", durationValue: 15, durationUnit: "min", confirmWindowMin: 25,
     categoryId: "", newCategoryName: "",
@@ -61,16 +90,20 @@ function AdminDashboard() {
       byAuction[bid.auction_id].push(bid);
     });
     setBidsByAuction(byAuction);
-    const userIds = [...new Set([...(b || []).map((x) => x.user_id), ...(a || []).filter((x) => x.cancelled_by).map((x) => x.cancelled_by)])];
-    if (userIds.length) {
-      const { data: profs } = await supabase.from("profiles").select("id, full_name").in("id", userIds);
-      const { data: contacts } = await supabase.from("contact_info").select("id, phone").in("id", userIds);
-      const phoneById = {};
-      (contacts || []).forEach((c) => (phoneById[c.id] = c.phone));
-      const map = {};
-      (profs || []).forEach((p) => (map[p.id] = { full_name: p.full_name, phone: phoneById[p.id] || "" }));
-      setProfilesById(map);
-    }
+
+    const { data: rem } = await supabase.from("rematazos").select("*").order("created_at", { ascending: false }).limit(200);
+    setRematazos(rem || []);
+    const { data: remCats } = await supabase.from("rematazo_categories").select("*").order("name", { ascending: true });
+    setRematazoCategories(remCats || []);
+    const { data: remSignups } = await supabase.from("rematazo_signups").select("*").order("created_at", { ascending: false });
+    setRematazoSignups(remSignups || []);
+
+    const userIds = [...new Set([
+      ...(b || []).map((x) => x.user_id),
+      ...(a || []).filter((x) => x.cancelled_by).map((x) => x.cancelled_by),
+      ...(remSignups || []).map((x) => x.user_id),
+    ])];
+    setProfilesById(await fetchProfilesWithPhones(userIds));
   }, []);
 
   useEffect(() => {
@@ -79,6 +112,8 @@ function AdminDashboard() {
       .channel("admin-dashboard")
       .on("postgres_changes", { event: "*", schema: "public", table: "auctions" }, load)
       .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rematazos" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rematazo_signups" }, load)
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [load]);
@@ -100,18 +135,16 @@ function AdminDashboard() {
   async function uploadAuctionImage(file) {
     if (!file) return;
     setFormError("");
-    if (!file.type.startsWith("image/")) return setFormError("Ese archivo no es una imagen.");
-    if (file.size > 5 * 1024 * 1024) return setFormError("La imagen no puede pesar más de 5 MB.");
-
     setUploadingAuctionImage(true);
-    const ext = file.name.split(".").pop();
-    const path = `auctions/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
-    setUploadingAuctionImage(false);
-    if (error) return setFormError("No se pudo subir la imagen: " + error.message);
-
-    const { data } = supabase.storage.from("site-assets").getPublicUrl(path);
-    setForm((f) => ({ ...f, imageUrl: data.publicUrl }));
+    try {
+      const ext = file.name.split(".").pop();
+      const url = await uploadSiteAsset(file, `auctions/${Date.now()}.${ext}`);
+      setForm((f) => ({ ...f, imageUrl: url }));
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setUploadingAuctionImage(false);
+    }
   }
 
   async function createCategory() {
@@ -180,7 +213,7 @@ function AdminDashboard() {
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 14px 60px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, background: "var(--crema-suave)", padding: 4, borderRadius: 10 }}>
-          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["reporte", "📊 Reporte"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
+          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["rematazos", "⚡ Rematazos"], ["inscritos-rematazos", "📋 Inscritos"], ["ventas-rematazos", "📊 Ventas rematazos"], ["reporte", "📊 Reporte"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
               fontWeight: 700, fontSize: 13, background: tab === id ? "var(--ladrillo)" : "transparent",
@@ -199,6 +232,12 @@ function AdminDashboard() {
         <AdminDesign />
       ) : tab === "redimir" ? (
         <RedeemPanel auctions={auctions} bidsByAuction={bidsByAuction} profilesById={profilesById} onChanged={load} />
+      ) : tab === "rematazos" ? (
+        <RematazoAdminPanel rematazos={rematazos} categories={rematazoCategories} onChanged={load} />
+      ) : tab === "inscritos-rematazos" ? (
+        <RematazoSignupsPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} onChanged={load} />
+      ) : tab === "ventas-rematazos" ? (
+        <RematazoSalesPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} />
       ) : tab === "reporte" ? (
         <ReportPanel auctions={auctions} bidsByAuction={bidsByAuction} />
       ) : (
@@ -483,14 +522,14 @@ function AuctionAdminCard({ auction, bids, profilesById, onChanged }) {
           <div style={{ fontSize: 14, fontWeight: 700 }}>Ganador: {profilesById[auction.winner_user_id]?.full_name || "..."}</div>
           <div style={{ fontSize: 13, opacity: 0.8 }}>{profilesById[auction.winner_user_id]?.phone || ""}</div>
           <div style={{ fontSize: 12, marginTop: 4, opacity: 0.7 }}>
-            {auction.winner_confirmed ? "✅ Ya confirmó su cupo" : "Aún no ha confirmado"}
+            {auction.winner_confirmed ? "✅ Ya confirmó su cupo" : `Aún no ha confirmado (postor ${auction.confirm_attempt || 1} de 2)`}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button className="btn-primary" style={{ flex: 1 }} disabled={busy} onClick={() => call("archive_auction", { p_auction_id: auction.id })}>
               <Check size={14} style={{ marginRight: 4 }} /> Archivar (ya coordinado)
             </button>
             <button className="btn-ghost" style={{ flex: 1, borderColor: "var(--alerta)", color: "var(--alerta)" }} disabled={busy} onClick={() => call("pass_to_next", { p_auction_id: auction.id })}>
-              Pasar al siguiente
+              {(auction.confirm_attempt || 1) >= 2 ? "Cancelar (2do tampoco confirmó)" : "Pasar al siguiente"}
             </button>
           </div>
           {confirmExpired && !auction.winner_confirmed && (
@@ -732,7 +771,11 @@ function UserDetailPanel({ user }) {
 }
 
 function AdminDesign() {
-  const { theme: activeTheme, logo_url, cover_image_url, commission_percent, refresh } = useSiteSettings();
+  const {
+    theme: activeTheme, logo_url, cover_image_url, commission_percent,
+    perfil_show_subastas, perfil_show_rematazos, perfil_show_ranking, perfil_show_historial, perfil_show_direcciones,
+    refresh,
+  } = useSiteSettings();
   const [selectedTheme, setSelectedTheme] = useState(activeTheme);
   const [logoUrl, setLogoUrl] = useState(logo_url || "");
   const [coverUrl, setCoverUrl] = useState(cover_image_url || "");
@@ -749,6 +792,32 @@ function AdminDesign() {
 
   useEffect(() => { setCommission(commission_percent ?? 8); }, [commission_percent]);
 
+  const [vis, setVis] = useState({
+    subastas: perfil_show_subastas, rematazos: perfil_show_rematazos, ranking: perfil_show_ranking,
+    historial: perfil_show_historial, direcciones: perfil_show_direcciones,
+  });
+  const [savingVis, setSavingVis] = useState(false);
+  const [visSaved, setVisSaved] = useState(false);
+
+  useEffect(() => {
+    setVis({
+      subastas: perfil_show_subastas, rematazos: perfil_show_rematazos, ranking: perfil_show_ranking,
+      historial: perfil_show_historial, direcciones: perfil_show_direcciones,
+    });
+  }, [perfil_show_subastas, perfil_show_rematazos, perfil_show_ranking, perfil_show_historial, perfil_show_direcciones]);
+
+  async function saveVisibility() {
+    setSavingVis(true); setVisSaved(false);
+    const { error } = await supabase.rpc("update_profile_visibility", {
+      p_show_subastas: vis.subastas, p_show_rematazos: vis.rematazos, p_show_ranking: vis.ranking,
+      p_show_historial: vis.historial, p_show_direcciones: vis.direcciones,
+    });
+    setSavingVis(false);
+    if (error) return alert(error.message);
+    setVisSaved(true);
+    refresh();
+  }
+
   async function saveCommission() {
     setCommissionError(""); setCommissionSaved(false);
     const value = Number(commission);
@@ -764,22 +833,19 @@ function AdminDesign() {
   async function uploadImage(file, kind) {
     setUploadError("");
     if (!file) return;
-    if (!file.type.startsWith("image/")) return setUploadError("Ese archivo no es una imagen.");
-    if (file.size > 5 * 1024 * 1024) return setUploadError("La imagen no puede pesar más de 5 MB.");
 
     const setUploading = kind === "logo" ? setUploadingLogo : setUploadingCover;
     setUploading(true);
-
-    const ext = file.name.split(".").pop();
-    const path = `${kind}-${Date.now()}.${ext}`;
-
-    const { error } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
-    setUploading(false);
-    if (error) return setUploadError("No se pudo subir la imagen: " + error.message);
-
-    const { data } = supabase.storage.from("site-assets").getPublicUrl(path);
-    if (kind === "logo") setLogoUrl(data.publicUrl);
-    else setCoverUrl(data.publicUrl);
+    try {
+      const ext = file.name.split(".").pop();
+      const url = await uploadSiteAsset(file, `${kind}-${Date.now()}.${ext}`);
+      if (kind === "logo") setLogoUrl(url);
+      else setCoverUrl(url);
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+    }
   }
 
   // Vista previa en vivo: aplica el tema elegido al instante, aunque no lo hayas guardado
@@ -899,6 +965,36 @@ function AdminDesign() {
         </div>
         {commissionError && <div className="error-text" style={{ marginTop: 8 }}>{commissionError}</div>}
         {commissionSaved && <div className="success-text" style={{ marginTop: 8 }}>✅ Comisión actualizada.</div>}
+      </div>
+
+      <div className="card">
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+          Qué puede ver el cliente en su perfil
+        </div>
+        <div style={{ fontSize: 12.5, opacity: 0.65, marginBottom: 12 }}>
+          Controla qué secciones aparecen en "Mi Perfil" — el panel donde cada cliente ve, en un solo lugar, sus subastas y sus rematazos.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[
+            ["subastas", "Mis subastas", "Subastas ganadas y en curso"],
+            ["rematazos", "Mis rematazos", "Inscripciones activas e historial"],
+            ["ranking", "Ranking y puntos", "Puntos acumulados y posición"],
+            ["historial", "Historial de compras", "Montos gastados en subastas y rematazos"],
+            ["direcciones", "Direcciones guardadas", "Direcciones usadas en domicilios de rematazos"],
+          ].map(([key, label, desc]) => (
+            <label key={key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={vis[key]} onChange={(e) => setVis((v) => ({ ...v, [key]: e.target.checked }))} />
+              <span>
+                <span style={{ fontWeight: 700 }}>{label}</span>
+                <span style={{ opacity: 0.6 }}> — {desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <button className="btn-primary" onClick={saveVisibility} disabled={savingVis} style={{ marginTop: 12 }}>
+          {savingVis ? "Guardando..." : "Guardar"}
+        </button>
+        {visSaved && <div className="success-text" style={{ marginTop: 8 }}>✅ Guardado — ya aplica para todos los clientes.</div>}
       </div>
     </div>
   );
@@ -1253,5 +1349,544 @@ function ImageGalleryPicker({ onSelect }) {
         </div>
       )}
     </>
+  );
+}
+
+// ============================================================
+// REMATAZOS: crear varios a la vez (por lote) y gestionar sus inscritos.
+// ============================================================
+
+function emptyRematazoDraft() {
+  return {
+    title: "", description: "", imageUrl: "", categoryId: "",
+    price: 9900, oldPrice: "", entregaModo: "mixto", limiteTipo: "ambos",
+    cuposMax: 50, durationValue: 45, durationUnit: "min",
+  };
+}
+
+function RematazoAdminPanel({ rematazos, categories, onChanged }) {
+  const [batch, setBatch] = useState([emptyRematazoDraft()]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+
+  const draft = batch[selectedIdx];
+  function updateDraft(patch) {
+    setBatch((b) => b.map((d, i) => (i === selectedIdx ? { ...d, ...patch } : d)));
+  }
+  function addDraft() {
+    setBatch((b) => [...b, emptyRematazoDraft()]);
+    setSelectedIdx(batch.length);
+  }
+  function removeDraft(i) {
+    setBatch((b) => b.filter((_, idx) => idx !== i));
+    setSelectedIdx((s) => Math.max(0, s >= i ? s - 1 : s));
+  }
+
+  async function uploadPhoto(file) {
+    if (!file) return;
+    setFormError("");
+    setUploadingPhoto(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const url = await uploadSiteAsset(file, `rematazos/${Date.now()}.${ext}`);
+      updateDraft({ imageUrl: url });
+    } catch (err) {
+      setFormError(err.message);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
+  async function createCategory() {
+    if (!newCategoryName.trim()) return;
+    setCreatingCategory(true);
+    const { data, error } = await supabase.rpc("create_rematazo_category", { p_name: newCategoryName.trim() });
+    setCreatingCategory(false);
+    if (error) return setFormError("No se pudo crear la categoría: " + error.message);
+    updateDraft({ categoryId: data });
+    setNewCategoryName("");
+    onChanged();
+  }
+
+  function validateDraft(d) {
+    if (!d.title.trim()) return "Ponle un nombre al producto.";
+    if (!d.price || Number(d.price) <= 0) return "El precio debe ser mayor a 0.";
+    if (d.limiteTipo !== "tiempo" && (!d.cuposMax || Number(d.cuposMax) <= 0)) return "Indica cuántos cupos tiene.";
+    if (d.limiteTipo !== "cantidad" && (!d.durationValue || Number(d.durationValue) <= 0)) return "Indica la duración.";
+    return "";
+  }
+
+  async function publishBatch() {
+    setFormError("");
+    for (const d of batch) {
+      const err = validateDraft(d);
+      if (err) return setFormError(`"${d.title || "Sin nombre"}": ${err}`);
+    }
+    setSaving(true);
+    for (const d of batch) {
+      const unit = DURATION_UNITS[d.durationUnit];
+      const durationMin = d.limiteTipo !== "cantidad" ? Number(d.durationValue) * unit.toMinutes : null;
+      const { error } = await supabase.rpc("create_rematazo", {
+        p_title: d.title.trim(), p_price: Number(d.price), p_entrega_modo: d.entregaModo, p_limite_tipo: d.limiteTipo,
+        p_description: d.description.trim(), p_image_url: d.imageUrl, p_category_id: d.categoryId || null,
+        p_old_price: d.oldPrice === "" ? null : Number(d.oldPrice),
+        p_cupos_max: d.limiteTipo !== "tiempo" ? Number(d.cuposMax) : null,
+        p_duracion_min: durationMin,
+      });
+      if (error) { setSaving(false); return setFormError(`"${d.title}": ${error.message}`); }
+    }
+    setSaving(false);
+    setBatch([emptyRematazoDraft()]);
+    setSelectedIdx(0);
+    onChanged();
+  }
+
+  function cancelWithReason(id) {
+    const reason = window.prompt("¿Por qué vas a cancelar este rematazo? (esto queda guardado)");
+    if (reason === null) return;
+    if (!reason.trim()) return alert("Escribe un motivo antes de continuar.");
+    supabase.rpc("cancel_rematazo", { p_rematazo_id: id, p_reason: reason.trim() }).then(({ error }) => {
+      if (error) alert(error.message);
+      onChanged();
+    });
+  }
+
+  const activos = rematazos.filter((r) => r.status === "activo");
+  const cerrados = rematazos.filter((r) => r.status === "cerrado");
+  const cancelados = rematazos.filter((r) => r.status === "cancelado");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div className="card">
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          <Zap size={16} /> Armar lote de rematazos
+        </div>
+        <div style={{ fontSize: 12.5, opacity: 0.65, marginBottom: 12 }}>
+          Agrega varios productos y publícalos todos juntos.
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {batch.map((d, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, background: i === selectedIdx ? "var(--queso-claro)" : "var(--crema-suave)", borderRadius: 20, padding: "4px 6px 4px 12px" }}>
+              <button onClick={() => setSelectedIdx(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
+                {d.title || `Rematazo ${i + 1}`}
+              </button>
+              {batch.length > 1 && (
+                <button onClick={() => removeDraft(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--alerta)", display: "flex" }}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+          <button className="btn-ghost" onClick={addDraft}>+ Agregar otro</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input className="input" placeholder="Producto (ej: Salchipapa Clásica)" value={draft.title} onChange={(e) => updateDraft({ title: e.target.value })} />
+          <input className="input" placeholder="Descripción corta (opcional)" value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {draft.imageUrl && (
+              <img src={draft.imageUrl} alt="Vista previa" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
+            )}
+            <label className="btn-ghost" style={{ cursor: "pointer" }}>
+              {uploadingPhoto ? "Subiendo..." : "📤 Subir foto"}
+              <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploadingPhoto} onChange={(e) => uploadPhoto(e.target.files[0])} />
+            </label>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>Categoría</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <select className="input" value={draft.categoryId} onChange={(e) => updateDraft({ categoryId: e.target.value })} style={{ flex: 1 }}>
+                <option value="">Sin categoría</option>
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <input className="input" placeholder="Nueva categoría..." value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} style={{ flex: 1 }} />
+              <button type="button" className="btn-ghost" onClick={createCategory} disabled={creatingCategory || !newCategoryName.trim()}>
+                {creatingCategory ? "..." : "+"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <LabeledInput label="Precio de rematazo" value={draft.price} onChange={(v) => updateDraft({ price: v })} />
+            <LabeledInput label="Precio antes (opcional)" value={draft.oldPrice} onChange={(v) => updateDraft({ oldPrice: v })} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>Modo de entrega</div>
+            <select className="input" value={draft.entregaModo} onChange={(e) => updateDraft({ entregaModo: e.target.value })}>
+              <option value="mixto">Domicilio y local</option>
+              <option value="domicilio">Solo domicilio</option>
+              <option value="local">Solo recoger en el local</option>
+            </select>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, opacity: 0.5, marginBottom: 2 }}>¿Cómo se limita?</div>
+            <select className="input" value={draft.limiteTipo} onChange={(e) => updateDraft({ limiteTipo: e.target.value })}>
+              <option value="ambos">Por tiempo y por cantidad (lo que llegue primero)</option>
+              <option value="tiempo">Solo por tiempo</option>
+              <option value="cantidad">Solo por cantidad de personas</option>
+            </select>
+          </div>
+
+          {draft.limiteTipo !== "tiempo" && (
+            <LabeledInput label="Cupos máximos" value={draft.cuposMax} onChange={(v) => updateDraft({ cuposMax: v })} />
+          )}
+          {draft.limiteTipo !== "cantidad" && (
+            <DurationInput value={draft.durationValue} unit={draft.durationUnit} onChange={(v, u) => updateDraft({ durationValue: v, durationUnit: u })} />
+          )}
+
+          <button className="btn-primary" onClick={publishBatch} disabled={saving} style={{ marginTop: 4 }}>
+            {saving ? "Publicando..." : `Publicar lote (${batch.length})`}
+          </button>
+          {formError && <div className="error-text" style={{ display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> {formError}</div>}
+        </div>
+      </div>
+
+      {activos.length > 0 && (
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10 }}>Activos ahora ({activos.length})</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {activos.map((r) => (
+              <div key={r.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+                    {r.title} <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.4, fontWeight: 400 }}>#{r.display_id}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, opacity: 0.6 }}>
+                    {fmtMoney(r.price)} · {r.limite_tipo !== "tiempo" ? `${r.cupos_usados}/${r.cupos_max} cupos` : `${r.cupos_usados} inscritos`}
+                    {r.limite_tipo !== "cantidad" && r.ends_at ? ` · cierra ${new Date(r.ends_at).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}` : ""}
+                  </div>
+                </div>
+                <button className="btn-ghost" style={{ color: "var(--alerta)" }} onClick={() => cancelWithReason(r.id)}>Cancelar</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cerrados.length > 0 && (
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, opacity: 0.7 }}>Cerrados ({cerrados.length})</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {cerrados.slice(0, 15).map((r) => (
+              <div key={r.id} className="card" style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span>{r.title}</span>
+                <span style={{ opacity: 0.7 }}>{r.cupos_usados} inscritos · {fmtMoney(r.price)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cancelados.length > 0 && (
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, opacity: 0.7, display: "flex", alignItems: "center", gap: 6 }}>
+            <X size={15} color="var(--alerta)" /> Cancelados ({cancelados.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {cancelados.slice(0, 15).map((r) => (
+              <div key={r.id} className="card" style={{ padding: "10px 14px", fontSize: 12.5, borderColor: "var(--alerta)" }}>
+                <div style={{ fontWeight: 700 }}>{r.title}</div>
+                <div style={{ opacity: 0.75, marginTop: 2 }}>Motivo: {r.cancel_reason || "(sin motivo especificado)"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const REMATAZO_STATUS_LABEL = { inscrito: "🟡 Inscrito", confirmado: "✅ Confirmó por WhatsApp", redimido: "🎉 Redimido", cancelado: "🚫 Cancelado" };
+
+function RematazoSignupsPanel({ rematazos, signups, profilesById, onChanged }) {
+  const [selectedId, setSelectedId] = useState("");
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    if (!selectedId && rematazos.length) setSelectedId(rematazos[0].id);
+  }, [rematazos, selectedId]);
+
+  async function redeem(signupId, via) {
+    setBusyId(signupId);
+    const { error } = await supabase.rpc("mark_rematazo_redeemed", { p_signup_id: signupId, p_entrega_via: via });
+    setBusyId(null);
+    if (error) return alert(error.message);
+    onChanged();
+  }
+
+  function kickWithReason(signupId) {
+    const reason = window.prompt("¿Por qué vas a sacar a esta persona del cupo? (ej: sin cobertura de domicilio — esto queda guardado)");
+    if (reason === null) return;
+    if (!reason.trim()) return alert("Escribe un motivo antes de continuar.");
+    setBusyId(signupId);
+    supabase.rpc("cancel_rematazo_signup", { p_signup_id: signupId, p_reason: reason.trim() }).then(({ error }) => {
+      setBusyId(null);
+      if (error) return alert(error.message);
+      onChanged();
+    });
+  }
+
+  const signupsForSelected = signups.filter((s) => s.rematazo_id === selectedId);
+  const activeSignups = signupsForSelected.filter((s) => s.status !== "cancelado");
+  const cancelledSignups = signupsForSelected.filter((s) => s.status === "cancelado");
+
+  return (
+    <div className="card">
+      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <Users size={16} /> Inscritos por rematazo
+      </div>
+
+      {rematazos.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 30, opacity: 0.6, fontSize: 13 }}>Todavía no has publicado ningún rematazo.</div>
+      ) : (
+        <>
+          <select className="input" value={selectedId} onChange={(e) => setSelectedId(e.target.value)} style={{ marginBottom: 14 }}>
+            {rematazos.map((r) => <option key={r.id} value={r.id}>{r.title} — {r.cupos_usados} inscritos</option>)}
+          </select>
+
+          {activeSignups.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 30, opacity: 0.6, fontSize: 13 }}>Nadie inscrito todavía en este rematazo.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {activeSignups.map((s) => {
+                const u = profilesById[s.user_id];
+                return (
+                  <div key={s.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13.5 }}>{u?.full_name || "..."}</div>
+                      <div style={{ fontSize: 11.5, opacity: 0.7 }}>{u?.phone || ""}</div>
+                      <div style={{ fontSize: 11.5, opacity: 0.6, marginTop: 2 }}>
+                        {s.entrega_via === "domicilio" ? `🛵 ${s.direccion}` : "🏪 Recoge en el local"}
+                      </div>
+                      <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>{REMATAZO_STATUS_LABEL[s.status]}</div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {s.status === "confirmado" && (
+                        <>
+                          <button className="btn-primary" disabled={busyId === s.id} onClick={() => redeem(s.id, "domicilio")} style={{ fontSize: 12.5, padding: "8px 12px" }}>
+                            {busyId === s.id ? "..." : "🛵 Domicilio"}
+                          </button>
+                          <button className="btn-primary" disabled={busyId === s.id} onClick={() => redeem(s.id, "local")} style={{ fontSize: 12.5, padding: "8px 12px" }}>
+                            {busyId === s.id ? "..." : "🏪 Recogió en el local"}
+                          </button>
+                        </>
+                      )}
+                      {s.status !== "redimido" && (
+                        <button
+                          className="btn-ghost" disabled={busyId === s.id} onClick={() => kickWithReason(s.id)}
+                          style={{ fontSize: 12.5, padding: "8px 12px", borderColor: "var(--alerta)", color: "var(--alerta)" }}
+                        >
+                          Sacar (sin cobertura)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {cancelledSignups.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.6, marginBottom: 6 }}>SACADOS DEL CUPO ({cancelledSignups.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {cancelledSignups.map((s) => (
+                  <div key={s.id} style={{ fontSize: 12, opacity: 0.7, padding: "6px 10px", borderRadius: 8, background: "var(--crema-suave)" }}>
+                    {profilesById[s.user_id]?.full_name || "..."} — {s.cancel_reason || "sin motivo"}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Ventas de rematazos: por producto y por usuario, con el mismo filtro de
+// fechas (Hoy/7 días/Mes/Rango) que ya usa el Reporte de subastas.
+function RematazoSalesPanel({ rematazos, signups, profilesById }) {
+  const [preset, setPreset] = useState("mes");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [view, setView] = useState("producto");
+  const [expandedUser, setExpandedUser] = useState(null);
+
+  const rematazosById = useMemo(() => {
+    const map = {};
+    rematazos.forEach((r) => (map[r.id] = r));
+    return map;
+  }, [rematazos]);
+
+  // Solo cuentan como venta las inscripciones activas de rematazos que
+  // siguen en pie (si el admin canceló el rematazo completo, esas
+  // inscripciones ya no deberían sumar al total).
+  const sales = useMemo(
+    () => signups
+      .filter((s) => s.status !== "cancelado")
+      .map((s) => ({ ...s, rematazo: rematazosById[s.rematazo_id] }))
+      .filter((s) => s.rematazo && s.rematazo.status !== "cancelado"),
+    [signups, rematazosById]
+  );
+
+  const { kpis, productRows, maxIngresos, userRows } = useMemo(() => {
+    const [rangeStart, rangeEnd] = reportRange(preset, customFrom, customTo);
+    const filtered = sales.filter((s) => {
+      const t = new Date(s.created_at);
+      return (!rangeStart || t >= rangeStart) && t <= rangeEnd;
+    });
+
+    const total = filtered.reduce((s, x) => s + x.rematazo.price, 0);
+    const productIds = new Set(filtered.map((s) => s.rematazo_id));
+    const buyerIds = new Set(filtered.map((s) => s.user_id));
+    const avg = filtered.length ? Math.round(total / filtered.length) : 0;
+
+    const byProduct = {};
+    filtered.forEach((s) => {
+      if (!byProduct[s.rematazo_id]) byProduct[s.rematazo_id] = { id: s.rematazo_id, title: s.rematazo.title, unidades: 0, ingresos: 0 };
+      byProduct[s.rematazo_id].unidades += 1;
+      byProduct[s.rematazo_id].ingresos += s.rematazo.price;
+    });
+    const productRowsSorted = Object.values(byProduct).sort((a, b) => b.ingresos - a.ingresos);
+
+    const byUser = {};
+    filtered.forEach((s) => {
+      if (!byUser[s.user_id]) byUser[s.user_id] = { items: [], total: 0 };
+      byUser[s.user_id].items.push(s);
+      byUser[s.user_id].total += s.rematazo.price;
+    });
+    const userRowsSorted = Object.entries(byUser).map(([uid, v]) => ({ uid, ...v, u: profilesById[uid] })).sort((a, b) => b.total - a.total);
+
+    return {
+      kpis: [
+        { label: "Total vendido", value: fmtMoney(total) },
+        { label: "Rematazos con ventas", value: productIds.size },
+        { label: "Personas que compraron", value: buyerIds.size },
+        { label: "Ticket promedio", value: fmtMoney(avg) },
+      ],
+      productRows: productRowsSorted,
+      maxIngresos: productRowsSorted.length ? productRowsSorted[0].ingresos : 1,
+      userRows: userRowsSorted,
+    };
+  }, [sales, preset, customFrom, customTo, profilesById]);
+
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <BarChart3 size={16} /> Ventas de rematazos
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+        {REPORT_PRESETS.map((p) => (
+          <button
+            key={p.id} onClick={() => setPreset(p.id)} className="pill"
+            style={{
+              border: "none", cursor: "pointer", fontSize: 12, padding: "6px 12px",
+              background: preset === p.id ? "var(--ladrillo)" : "var(--crema-suave)",
+              color: preset === p.id ? "white" : "var(--carbon)",
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {preset === "custom" && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, opacity: 0.7 }}>
+            Desde <input className="input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ marginLeft: 4 }} />
+          </label>
+          <label style={{ fontSize: 12, opacity: 0.7 }}>
+            Hasta <input className="input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ marginLeft: 4 }} />
+          </label>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        {kpis.map((k) => (
+          <div key={k.label} className="card">
+            <div style={{ fontSize: 11, fontWeight: 700, opacity: 0.6, textTransform: "uppercase" }}>{k.label}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 18, marginTop: 4 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {[["producto", "Por producto"], ["usuario", "Por usuario"]].map(([id, label]) => (
+          <button
+            key={id} onClick={() => setView(id)} className="pill"
+            style={{
+              border: "none", cursor: "pointer", fontSize: 12, padding: "6px 12px",
+              background: view === id ? "var(--ladrillo)" : "var(--crema-suave)",
+              color: view === id ? "white" : "var(--carbon)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "producto" ? (
+        productRows.length === 0 ? (
+          <div style={{ fontSize: 12.5, opacity: 0.6 }}>No hay ventas en este rango de fechas.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {productRows.map((r) => (
+              <div key={r.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>{r.title}</div>
+                  <div style={{ height: 6, borderRadius: 999, background: "var(--crema-suave)", overflow: "hidden", marginTop: 6 }}>
+                    <div style={{ width: `${Math.max(6, Math.round((r.ingresos / maxIngresos) * 100))}%`, height: "100%", background: "var(--ladrillo)" }} />
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 14 }}>{fmtMoney(r.ingresos)}</div>
+                  <div style={{ fontSize: 11, opacity: 0.6 }}>{r.unidades} unidad{r.unidades === 1 ? "" : "es"}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : userRows.length === 0 ? (
+        <div style={{ fontSize: 12.5, opacity: 0.6 }}>No hay compras en este rango de fechas.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {userRows.map((r) => (
+            <div key={r.uid}>
+              <div
+                className="card" onClick={() => setExpandedUser(expandedUser === r.uid ? null : r.uid)}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>{r.u?.full_name || "..."}</div>
+                  <div style={{ fontSize: 11.5, opacity: 0.6 }}>{r.u?.phone || ""} · {r.items.length} compra{r.items.length === 1 ? "" : "s"}</div>
+                </div>
+                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 14 }}>{fmtMoney(r.total)}</div>
+              </div>
+              {expandedUser === r.uid && (
+                <div className="card" style={{ marginTop: 4 }}>
+                  {r.items.map((it) => (
+                    <div key={it.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0" }}>
+                      <span>{new Date(it.created_at).toLocaleDateString("es-CO", { dateStyle: "medium" })} · {it.rematazo.title}</span>
+                      <span style={{ fontFamily: "var(--font-mono)" }}>{fmtMoney(it.rematazo.price)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

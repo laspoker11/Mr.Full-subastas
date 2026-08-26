@@ -191,7 +191,10 @@ export default function AuctionDetail() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {!auction.winner_confirmed && auction.confirm_deadline && (
               <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ladrillo)" }}>
-                ⏳ Tienes hasta <Countdown endsAt={auction.confirm_deadline} /> para confirmar, o el premio pasa al siguiente postor.
+                ⏳ Tienes hasta <Countdown endsAt={auction.confirm_deadline} /> para confirmar, o{" "}
+                {(auction.confirm_attempt || 1) >= 2
+                  ? "la subasta se cancela."
+                  : "el premio pasa al siguiente postor."}
               </div>
             )}
             {!auction.winner_confirmed && (

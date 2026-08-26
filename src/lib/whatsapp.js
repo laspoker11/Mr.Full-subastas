@@ -19,3 +19,10 @@ export function waWinnerMessage({ title, amount, commissionPercent, total, fullN
 export function waGeneralMessage() {
   return "¡Hola MrFull! Tengo una pregunta sobre las subastas 🙂";
 }
+
+export function waRematazoMessage({ title, price, fullName }) {
+  return (
+    `¡Hola MrFull! ⚡ Me inscribí al rematazo de *${title}* por $${Number(price).toLocaleString("es-CO")}.\n` +
+    `Mi nombre es ${fullName}. Quiero confirmar mis datos para reclamarlo 🎉`
+  );
+}

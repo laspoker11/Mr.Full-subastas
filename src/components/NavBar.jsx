@@ -50,6 +50,9 @@ export default function NavBar() {
           <span style={{ fontSize: 11.5, color: "var(--texto-sobre-oscuro)", opacity: 0.75, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
             🟢 {onlineCount} en línea
           </span>
+          <Link to="/rematazos" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
+            ⚡ Rematazos
+          </Link>
           {user && (
             <Link to="/ranking" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
               🏆 Ranking

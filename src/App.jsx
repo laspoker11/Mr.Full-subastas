@@ -10,6 +10,7 @@ import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Cliente from "./pages/Cliente";
+import Rematazos from "./pages/Rematazos";
 import Ranking from "./pages/Ranking";
 import AuctionDetail from "./pages/AuctionDetail";
 import Admin from "./pages/Admin";
@@ -38,6 +39,15 @@ function Shell() {
     return () => sub.subscription.unsubscribe();
   }, [navigate]);
 
+  // Cuando el dominio rematazos.mrfull.online quede conectado a este mismo
+  // sitio (Cloudflare Pages sirve el mismo build en varios dominios), quien
+  // entre por ahí cae directo en /rematazos en vez de la página de subastas.
+  useEffect(() => {
+    if (window.location.hostname === "rematazos.mrfull.online" && window.location.pathname === "/") {
+      navigate("/rematazos", { replace: true });
+    }
+  }, [navigate]);
+
   return (
     <>
       <NavBar />
@@ -47,6 +57,7 @@ function Shell() {
         <Route path="/olvide-password" element={<ForgotPassword />} />
         <Route path="/restablecer-password" element={<ResetPassword />} />
         <Route path="/" element={<Cliente />} />
+        <Route path="/rematazos" element={<Rematazos />} />
         <Route path="/ranking" element={<Ranking />} />
         <Route path="/subasta/:id" element={<AuctionDetail />} />
         <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
