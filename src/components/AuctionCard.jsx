@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
 import Countdown, { timeParts } from "./Countdown";
+import { useAuth } from "../lib/auth";
+import { logActivity } from "../lib/activity";
 
 export function fmtMoney(n) {
   if (n === null || n === undefined || isNaN(n)) return "-";
@@ -24,9 +26,14 @@ export function totalWithCommission(amount, commissionPercent) {
 export default function AuctionCard({ auction, topAmount }) {
   const { expired } = timeParts(auction.ends_at);
   const live = auction.status === "live" && !expired;
+  const { user } = useAuth();
 
   return (
-    <Link to={`/subasta/${auction.id}`} style={{ textDecoration: "none", color: "inherit" }}>
+    <Link
+      to={`/subasta/${auction.id}`}
+      style={{ textDecoration: "none", color: "inherit" }}
+      onClick={() => logActivity(user?.id, "click", location.pathname, `ver_subasta:${auction.display_id || auction.id}`)}
+    >
       <div className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
         <div style={{
           width: 64, height: 64, borderRadius: 12, overflow: "hidden", flexShrink: 0,

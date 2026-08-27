@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "./lib/auth";
 import { SiteSettingsProvider } from "./lib/siteSettings";
 import { supabase } from "./supabaseClient";
 import { isRematazosDomain } from "./lib/domain";
+import { usePageViewTracking } from "./lib/activity";
 import NavBar from "./components/NavBar";
 import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
 import Login from "./pages/Login";
@@ -26,6 +27,8 @@ function RequireAuth({ children }) {
 
 function Shell() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  usePageViewTracking(user?.id);
 
   useEffect(() => {
     document.title = isRematazosDomain ? "Rematazos MrFull" : "Subastas MrFull";

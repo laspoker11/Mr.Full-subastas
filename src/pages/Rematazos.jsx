@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth";
 import Countdown, { useClockTick } from "../components/Countdown";
 import { fmtMoney } from "../components/AuctionCard";
 import { waLink, waRematazoMessage } from "../lib/whatsapp";
+import { logActivity } from "../lib/activity";
 import { Zap, Users } from "lucide-react";
 
 export default function Rematazos() {
@@ -93,6 +94,7 @@ export default function Rematazos() {
     });
     setBusyId(null);
     if (error) return setErrorById((prev) => ({ ...prev, [r.id]: error.message }));
+    logActivity(user.id, "click", location.pathname, `inscribirse_rematazo:${r.id}`);
     setOpenFormId(null);
     loadMySignups();
   }

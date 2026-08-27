@@ -1271,6 +1271,50 @@ end;
 $$;
 
 -- ============================================================
+-- 15) ACTIVIDAD: qué páginas visita cada usuario y en qué botones
+-- importantes hace clic (pujar, inscribirse a un rematazo, escribir
+-- por WhatsApp, abrir una subasta), para el panel Admin -> Actividad.
+-- Solo se registra actividad de usuarios con sesión iniciada.
+-- ============================================================
+
+create table if not exists public.user_activity (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  event_type text not null check (event_type in ('page_view', 'click')),
+  path text not null,
+  label text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists user_activity_created_at_idx on public.user_activity (created_at desc);
+create index if not exists user_activity_user_id_idx on public.user_activity (user_id);
+
+alter table public.user_activity enable row level security;
+
+drop policy if exists "el usuario registra su propia actividad" on public.user_activity;
+create policy "el usuario registra su propia actividad"
+  on public.user_activity for insert
+  with check (user_id = auth.uid());
+
+drop policy if exists "solo admins ven la actividad" on public.user_activity;
+create policy "solo admins ven la actividad"
+  on public.user_activity for select
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- Borra actividad de hace más de 60 días, para que la tabla no crezca sin
+-- control. Se engancha al mismo robot que ya corre cada minuto para
+-- subastas — pero solo actúa una vez al día (a la hora 3 UTC).
+create or replace function public._purge_old_activity()
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.user_activity where created_at < now() - interval '60 days';
+end;
+$$;
+
+select cron.schedule('purge-old-activity', '0 3 * * *', $$select public._purge_old_activity()$$);
+
+-- ============================================================
 -- ÚLTIMO PASO (hazlo tú, manualmente, después de registrarte):
 -- Ve a Table Editor -> profiles -> busca tu usuario -> pon
 -- is_admin en TRUE. Así te conviertes en administrador.

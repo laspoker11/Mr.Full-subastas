@@ -233,7 +233,7 @@ function AdminDashboard() {
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 14px 60px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, background: "var(--crema-suave)", padding: 4, borderRadius: 10 }}>
-          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["rematazos", "⚡ Rematazos"], ["inscritos-rematazos", "📋 Inscritos"], ["ventas-rematazos", "📊 Ventas rematazos"], ["reporte", "📊 Reporte"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
+          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["rematazos", "⚡ Rematazos"], ["inscritos-rematazos", "📋 Inscritos"], ["ventas-rematazos", "📊 Ventas rematazos"], ["reporte", "📊 Reporte"], ["actividad", "📈 Actividad"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
               fontWeight: 700, fontSize: 13, background: tab === id ? "var(--ladrillo)" : "transparent",
@@ -260,6 +260,8 @@ function AdminDashboard() {
         <RematazoSalesPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} />
       ) : tab === "reporte" ? (
         <ReportPanel auctions={auctions} bidsByAuction={bidsByAuction} />
+      ) : tab === "actividad" ? (
+        <ActivityPanel />
       ) : (
       <>
       <div className="card">
@@ -642,6 +644,131 @@ function DurationInput({ value, unit, onChange }) {
           style={{ width: 70 }}
         />
         <button type="button" className="btn-ghost" onClick={increment} style={{ padding: "0 16px" }}>+</button>
+      </div>
+    </div>
+  );
+}
+
+// Nombres amigables para las rutas más comunes, para no mostrarle al admin
+// URLs crudas como "/subasta/uuid-largo".
+const PATH_LABELS = {
+  "/": "Inicio (subastas)",
+  "/rematazos": "Rematazos",
+  "/ranking": "Ranking",
+  "/perfil": "Mi perfil",
+  "/admin": "Panel admin",
+  "/login": "Inicio de sesión",
+  "/registro": "Registro",
+};
+
+function describePath(path) {
+  if (PATH_LABELS[path]) return PATH_LABELS[path];
+  if (path.startsWith("/subasta/")) return "Detalle de una subasta";
+  return path;
+}
+
+// Vuelve legible el "label" que guarda cada clic — ej. "pujar:AB12" -> "Pujó en AB12".
+function describeEvent(row) {
+  if (row.event_type === "page_view") return `Visitó: ${describePath(row.path)}`;
+  const [kind, ref] = (row.label || "").split(":");
+  if (kind === "pujar") return `Pujó en la subasta ${ref}`;
+  if (kind === "ver_subasta") return `Abrió la subasta ${ref}`;
+  if (kind === "inscribirse_rematazo") return "Se inscribió a un rematazo";
+  if (kind === "whatsapp_flotante") return "Escribió por WhatsApp";
+  return row.label || describePath(row.path);
+}
+
+function ActivityPanel() {
+  const [rows, setRows] = useState([]);
+  const [profilesById, setProfilesById] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from("user_activity").select("*")
+      .order("created_at", { ascending: false }).limit(500);
+    setRows(data || []);
+    const userIds = [...new Set((data || []).map((r) => r.user_id))];
+    if (userIds.length) {
+      const { data: profs } = await supabase.from("profiles").select("id, full_name").in("id", userIds);
+      const map = {};
+      (profs || []).forEach((p) => (map[p.id] = p.full_name));
+      setProfilesById(map);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const nameOf = (id) => profilesById[id] || "Usuario";
+
+  const filtered = rows.filter((r) => !query.trim() || nameOf(r.user_id).toLowerCase().includes(query.toLowerCase()));
+
+  // Ranking de usuarios más activos (por cantidad de movimientos registrados)
+  const byUser = {};
+  rows.forEach((r) => { byUser[r.user_id] = (byUser[r.user_id] || 0) + 1; });
+  const topUsers = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  // Páginas más vistas
+  const byPath = {};
+  rows.filter((r) => r.event_type === "page_view").forEach((r) => { byPath[r.path] = (byPath[r.path] || 0) + 1; });
+  const topPaths = Object.entries(byPath).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <div className="card" style={{ flex: "1 1 260px" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Usuarios más activos</div>
+          {topUsers.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
+          {topUsers.map(([id, count]) => (
+            <div key={id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
+              <span>{nameOf(id)}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        <div className="card" style={{ flex: "1 1 260px" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Páginas más vistas</div>
+          {topPaths.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
+          {topPaths.map(([path, count]) => (
+            <div key={path} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
+              <span>{describePath(path)}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>
+            Movimientos recientes ({filtered.length})
+          </div>
+          <button onClick={load} className="btn-ghost">Actualizar</button>
+        </div>
+        <input className="input" placeholder="Buscar por nombre de usuario..." value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 10 }} />
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 30, opacity: 0.6 }}>Cargando...</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 480, overflowY: "auto" }}>
+            {filtered.map((r) => (
+              <div key={r.id} style={{
+                display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 12px",
+                borderRadius: 10, background: "var(--crema-suave)", fontSize: 12.5,
+              }}>
+                <div>
+                  <span style={{ fontWeight: 700 }}>{nameOf(r.user_id)}</span> — {describeEvent(r)}
+                </div>
+                <div style={{ opacity: 0.55, whiteSpace: "nowrap" }}>
+                  {new Date(r.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
+                </div>
+              </div>
+            ))}
+            {filtered.length === 0 && <div style={{ textAlign: "center", padding: 20, opacity: 0.5, fontSize: 13 }}>Sin resultados</div>}
+          </div>
+        )}
       </div>
     </div>
   );
