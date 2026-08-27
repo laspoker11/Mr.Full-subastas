@@ -132,12 +132,19 @@ export default function MyProfile() {
                 const a = p.auctions;
                 const iWon = a.status === "closed" && a.winner_user_id === user.id;
                 const closedNotWon = a.status === "closed" && a.winner_user_id !== user.id;
-                const running = a.status === "live" || a.status === "confirming";
+                // Ganaste pero todavía no confirmas el cupo — se le muestra
+                // aparte del genérico "En curso" para que no pase de largo.
+                const needsConfirm = a.status === "confirming" && a.winner_user_id === user.id;
+                const running = (a.status === "live" || a.status === "confirming") && !needsConfirm;
                 const cancelled = a.status === "void";
 
                 return (
                   <Link key={p.auction_id} to={`/subasta/${a.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-                    <div className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <div className="card" style={{
+                      display: "flex", gap: 12, alignItems: "center",
+                      border: needsConfirm ? "2px solid var(--ladrillo)" : "2px solid transparent",
+                      background: needsConfirm ? "var(--queso-claro)" : undefined,
+                    }}>
                       <div style={{
                         width: 52, height: 52, borderRadius: 10, overflow: "hidden", flexShrink: 0,
                         background: "var(--crema-suave)", display: "flex", alignItems: "center", justifyContent: "center",
@@ -148,7 +155,8 @@ export default function MyProfile() {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 14.5 }}>{a.title}</div>
-                        <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+                        <div style={{ fontSize: 12, opacity: needsConfirm ? 1 : 0.65, fontWeight: needsConfirm ? 700 : 400, color: needsConfirm ? "var(--ladrillo)" : "inherit", marginTop: 2 }}>
+                          {needsConfirm && "🏆 ¡Ganaste! Entra a confirmar tu cupo"}
                           {running && "🟢 En curso"}
                           {iWon && `🏆 Ganada · ${fmtMoney(myBids[p.auction_id] ?? a.start_price)}`}
                           {closedNotWon && "❌ No ganada"}

@@ -27,6 +27,11 @@ export default function AuctionCard({ auction, topAmount }) {
   const { expired } = timeParts(auction.ends_at);
   const live = auction.status === "live" && !expired;
   const { user } = useAuth();
+  // Si la subasta está esperando confirmación Y el que gañó fue el usuario
+  // actual, se le resalta bien claro aquí mismo — antes solo se veía si por
+  // casualidad entraba a esa subasta puntual, y algunos ganadores no se
+  // daban cuenta de que tenían que confirmar.
+  const iAmWinner = auction.status === "confirming" && auction.winner_user_id === user?.id;
 
   return (
     <Link
@@ -34,7 +39,11 @@ export default function AuctionCard({ auction, topAmount }) {
       style={{ textDecoration: "none", color: "inherit" }}
       onClick={() => logActivity(user?.id, "click", location.pathname, `ver_subasta:${auction.title}`)}
     >
-      <div className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      <div className="card" style={{
+        display: "flex", gap: 12, alignItems: "center",
+        border: iAmWinner ? "2px solid var(--ladrillo)" : "2px solid transparent",
+        background: iAmWinner ? "var(--queso-claro)" : undefined,
+      }}>
         <div style={{
           width: 64, height: 64, borderRadius: 12, overflow: "hidden", flexShrink: 0,
           background: "var(--crema-suave)", display: "flex", alignItems: "center", justifyContent: "center",
@@ -46,8 +55,9 @@ export default function AuctionCard({ auction, topAmount }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>{auction.title}</div>
           <div style={{ fontSize: 11, opacity: 0.45, fontFamily: "var(--font-mono)" }}>ID: {auction.display_id}</div>
-          <div style={{ fontSize: 12.5, opacity: 0.6 }}>
-            {auction.status === "confirming" ? "Esperando confirmación del ganador"
+          <div style={{ fontSize: 12.5, opacity: iAmWinner ? 1 : 0.6, fontWeight: iAmWinner ? 700 : 400, color: iAmWinner ? "var(--ladrillo)" : "inherit" }}>
+            {iAmWinner ? "🏆 ¡Ganaste! Entra a confirmar tu cupo"
+              : auction.status === "confirming" ? "Esperando confirmación del ganador"
               : live ? <>Cierra en <Countdown endsAt={auction.ends_at} /></>
               : "Cerrada"}
           </div>
@@ -57,10 +67,10 @@ export default function AuctionCard({ auction, topAmount }) {
             {fmtMoney(topAmount ?? auction.start_price)}
           </div>
           <span className="pill" style={{
-            background: live ? "var(--salsa)" : auction.status === "confirming" ? "var(--queso)" : "#ddd",
-            color: live ? "white" : "var(--carbon)",
+            background: iAmWinner ? "var(--ladrillo)" : live ? "var(--salsa)" : auction.status === "confirming" ? "var(--queso)" : "#ddd",
+            color: iAmWinner || live ? "white" : "var(--carbon)",
           }}>
-            {live ? "En vivo" : auction.status === "confirming" ? "Confirmando" : "Cerrada"}
+            {iAmWinner ? "¡Ganaste!" : live ? "En vivo" : auction.status === "confirming" ? "Confirmando" : "Cerrada"}
           </span>
         </div>
       </div>
