@@ -686,7 +686,39 @@ function actorKey(row) {
   return row.user_id || `anon:${row.visitor_id || "?"}`;
 }
 
+// Agrupa los movimientos por hora del día (0-23, sumando todos los días del
+// rango — sirve para ver a qué horas hay más gente activa), por día
+// calendario, o por mes. Devuelve filas listas para dibujar como barras.
+function groupByTime(rows, mode) {
+  const groups = {};
+  rows.forEach((r) => {
+    const d = new Date(r.created_at);
+    let sortKey, display;
+    if (mode === "hora") {
+      const h = d.getHours();
+      sortKey = String(h).padStart(2, "0");
+      display = `${sortKey}:00`;
+    } else if (mode === "dia") {
+      sortKey = d.toISOString().slice(0, 10);
+      display = d.toLocaleDateString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric" });
+    } else {
+      sortKey = d.toISOString().slice(0, 7);
+      display = d.toLocaleDateString("es-CO", { month: "long", year: "numeric" });
+    }
+    if (!groups[sortKey]) groups[sortKey] = { sortKey, display, count: 0 };
+    groups[sortKey].count++;
+  });
+  const list = Object.values(groups).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  return mode === "hora" ? list : list.reverse();
+}
+
+const TIME_GROUP_OPTIONS = [["hora", "Por hora del día"], ["dia", "Por día"], ["mes", "Por mes"]];
+
 function ActivityPanel() {
+  const [preset, setPreset] = useState("semana");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [timeGroupBy, setTimeGroupBy] = useState("dia");
   const [rows, setRows] = useState([]);
   const [profilesById, setProfilesById] = useState({});
   const [loading, setLoading] = useState(true);
@@ -694,9 +726,11 @@ function ActivityPanel() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("user_activity").select("*")
-      .order("created_at", { ascending: false }).limit(800);
+    const [start, end] = reportRange(preset, customFrom, customTo);
+    let q = supabase.from("user_activity").select("*").order("created_at", { ascending: false }).limit(3000);
+    if (start) q = q.gte("created_at", start.toISOString());
+    q = q.lte("created_at", end.toISOString());
+    const { data } = await q;
     setRows(data || []);
     const userIds = [...new Set((data || []).map((r) => r.user_id).filter(Boolean))];
     if (userIds.length) {
@@ -706,7 +740,7 @@ function ActivityPanel() {
       setProfilesById(map);
     }
     setLoading(false);
-  }, []);
+  }, [preset, customFrom, customTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -747,11 +781,77 @@ function ActivityPanel() {
   const uniqueVisitors = new Set(rows.map((r) => r.visitor_id).filter(Boolean)).size;
   const registeredActors = new Set(rows.filter((r) => r.user_id).map((r) => r.user_id)).size;
 
+  const timeRows = groupByTime(rows, timeGroupBy);
+  const maxTimeCount = Math.max(1, ...timeRows.map((g) => g.count));
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ fontSize: 12, opacity: 0.6 }}>
-        {uniqueVisitors} navegadores distintos vistos (últimos 800 movimientos) · {registeredActors} con cuenta creada
+      <div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {REPORT_PRESETS.map((p) => (
+            <button
+              key={p.id} onClick={() => setPreset(p.id)} className="pill"
+              style={{
+                border: "none", cursor: "pointer", fontSize: 12, padding: "6px 12px",
+                background: preset === p.id ? "var(--ladrillo)" : "var(--crema-suave)",
+                color: preset === p.id ? "white" : "var(--carbon)",
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {preset === "custom" && (
+          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, opacity: 0.7 }}>
+              Desde <input className="input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ marginLeft: 4 }} />
+            </label>
+            <label style={{ fontSize: 12, opacity: 0.7 }}>
+              Hasta <input className="input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ marginLeft: 4 }} />
+            </label>
+          </div>
+        )}
       </div>
+
+      <div style={{ fontSize: 12, opacity: 0.6 }}>
+        {rows.length} movimientos en este rango · {uniqueVisitors} navegadores distintos · {registeredActors} con cuenta creada
+      </div>
+
+      <div className="card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>Cuándo se mueve la gente</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {TIME_GROUP_OPTIONS.map(([id, label]) => (
+              <button
+                key={id} onClick={() => setTimeGroupBy(id)} className="pill"
+                style={{
+                  border: "none", cursor: "pointer", fontSize: 11.5, padding: "5px 10px",
+                  background: timeGroupBy === id ? "var(--ladrillo)" : "var(--crema-suave)",
+                  color: timeGroupBy === id ? "white" : "var(--carbon)",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {timeRows.length === 0 ? (
+          <div style={{ fontSize: 12.5, opacity: 0.6 }}>Sin movimientos en este rango.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {timeRows.map((g) => (
+              <div key={g.sortKey} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <div style={{ width: 92, flexShrink: 0, opacity: 0.75, textTransform: "capitalize" }}>{g.display}</div>
+                <div style={{ flex: 1, background: "var(--crema-suave)", borderRadius: 6, overflow: "hidden", height: 14 }}>
+                  <div style={{ width: `${(g.count / maxTimeCount) * 100}%`, background: "var(--ladrillo)", height: "100%", borderRadius: 6 }} />
+                </div>
+                <div style={{ width: 28, textAlign: "right", fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{g.count}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <div className="card" style={{ flex: "1 1 260px" }}>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Más activos</div>
