@@ -723,6 +723,7 @@ function ActivityPanel() {
   const [profilesById, setProfilesById] = useState({});
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [expandedActor, setExpandedActor] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -750,6 +751,20 @@ function ActivityPanel() {
   };
 
   const filtered = rows.filter((r) => !query.trim() || nameOf(r).toLowerCase().includes(query.toLowerCase()));
+
+  // Agrupa los movimientos de la lista por persona (mismo criterio que el
+  // ranking de "Más activos"), para no repetir 30 veces al mismo visitante
+  // anónimo — solo se ve su movimiento más reciente hasta que le den clic.
+  const groupedFiltered = [];
+  const groupIndexByKey = {};
+  filtered.forEach((r) => {
+    const key = actorKey(r);
+    if (!(key in groupIndexByKey)) {
+      groupIndexByKey[key] = groupedFiltered.length;
+      groupedFiltered.push({ key, events: [] });
+    }
+    groupedFiltered[groupIndexByKey[key]].events.push(r);
+  });
 
   // Ranking de personas más activas (usuarios y visitantes anónimos por separado)
   const byActor = {};
@@ -888,7 +903,7 @@ function ActivityPanel() {
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>
-            Movimientos recientes ({filtered.length})
+            Movimientos recientes ({groupedFiltered.length} personas, {filtered.length} movimientos)
           </div>
           <button onClick={load} className="btn-ghost">Actualizar</button>
         </div>
@@ -897,21 +912,51 @@ function ActivityPanel() {
           <div style={{ textAlign: "center", padding: 30, opacity: 0.6 }}>Cargando...</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 480, overflowY: "auto" }}>
-            {filtered.map((r) => (
-              <div key={r.id} style={{
-                display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 12px",
-                borderRadius: 10, background: "var(--crema-suave)", fontSize: 12.5,
-              }}>
-                <div>
-                  <span style={{ fontWeight: 700 }}>{r.user_id ? "👤" : "🕵️"} {nameOf(r)}</span> — {describeEvent(r)}
+            {groupedFiltered.map(({ key, events }) => {
+              const top = events[0];
+              const expanded = expandedActor === key;
+              return (
+                <div key={key}>
+                  <div
+                    onClick={() => setExpandedActor(expanded ? null : key)}
+                    style={{
+                      display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 12px", cursor: "pointer",
+                      borderRadius: 10, background: "var(--crema-suave)", fontSize: 12.5,
+                      border: expanded ? "2px solid var(--ladrillo)" : "2px solid transparent",
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 700 }}>{top.user_id ? "👤" : "🕵️"} {nameOf(top)}</span> — {describeEvent(top)}
+                      {events.length > 1 && (
+                        <span className="pill" style={{ marginLeft: 6, fontSize: 10, background: "var(--queso-claro)" }}>
+                          {expanded ? "ocultar" : `+${events.length - 1} más`}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ opacity: 0.55, whiteSpace: "nowrap", textAlign: "right" }}>
+                      <div>{new Date(top.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}</div>
+                      <div style={{ fontSize: 10.5 }}>{top.utm_source || "directo"}</div>
+                    </div>
+                  </div>
+                  {expanded && events.length > 1 && (
+                    <div style={{ display: "flex", flexDirection: "column", padding: "4px 12px 6px 30px" }}>
+                      {events.slice(1).map((r) => (
+                        <div key={r.id} style={{
+                          display: "flex", justifyContent: "space-between", fontSize: 11.5, opacity: 0.8,
+                          padding: "4px 0", borderTop: "1px solid rgba(0,0,0,0.06)",
+                        }}>
+                          <span>{describeEvent(r)}</span>
+                          <span style={{ opacity: 0.65, whiteSpace: "nowrap" }}>
+                            {new Date(r.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div style={{ opacity: 0.55, whiteSpace: "nowrap", textAlign: "right" }}>
-                  <div>{new Date(r.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}</div>
-                  <div style={{ fontSize: 10.5 }}>{r.utm_source || "directo"}</div>
-                </div>
-              </div>
-            ))}
-            {filtered.length === 0 && <div style={{ textAlign: "center", padding: 20, opacity: 0.5, fontSize: 13 }}>Sin resultados</div>}
+              );
+            })}
+            {groupedFiltered.length === 0 && <div style={{ textAlign: "center", padding: 20, opacity: 0.5, fontSize: 13 }}>Sin resultados</div>}
           </div>
         )}
       </div>
