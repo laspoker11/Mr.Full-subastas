@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { trackConversion } from "../lib/activity";
 
 export default function Register() {
   const { register } = useAuth();
@@ -22,6 +23,7 @@ export default function Register() {
     const { error } = await register(email.trim(), password, fullName.trim(), phone.trim());
     setLoading(false);
     if (error) return setError(error.message);
+    trackConversion(null, "registro", location.pathname);
     setOk(true);
   }
 

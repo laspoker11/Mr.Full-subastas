@@ -1315,6 +1315,38 @@ $$;
 select cron.schedule('purge-old-activity', '0 3 * * *', $$select public._purge_old_activity()$$);
 
 -- ============================================================
+-- 16) ACTIVIDAD (parte 2): ahora también se registra a los
+-- visitantes que todavía NO tienen cuenta (para ver dónde se
+-- pierden antes de registrarse) y de dónde vienen (campaña de
+-- Facebook, WhatsApp, directo...), dejando la puerta lista para
+-- conectar píxeles de publicidad más adelante sin tocar la base
+-- de nuevo.
+-- ============================================================
+
+alter table public.user_activity alter column user_id drop not null;
+alter table public.user_activity add column if not exists visitor_id text;
+alter table public.user_activity add column if not exists session_id text;
+alter table public.user_activity add column if not exists utm_source text;
+alter table public.user_activity add column if not exists utm_medium text;
+alter table public.user_activity add column if not exists utm_campaign text;
+alter table public.user_activity add column if not exists referrer text;
+
+create index if not exists user_activity_visitor_id_idx on public.user_activity (visitor_id);
+
+alter table public.user_activity drop constraint if exists user_activity_event_type_check;
+alter table public.user_activity add constraint user_activity_event_type_check
+  check (event_type in ('page_view', 'click', 'conversion'));
+
+drop policy if exists "el usuario registra su propia actividad" on public.user_activity;
+drop policy if exists "cualquiera registra su propia actividad" on public.user_activity;
+create policy "cualquiera registra su propia actividad"
+  on public.user_activity for insert
+  with check (
+    (auth.uid() is not null and user_id = auth.uid())
+    or (auth.uid() is null and user_id is null)
+  );
+
+-- ============================================================
 -- ÚLTIMO PASO (hazlo tú, manualmente, después de registrarte):
 -- Ve a Table Editor -> profiles -> busca tu usuario -> pon
 -- is_admin en TRUE. Así te conviertes en administrador.

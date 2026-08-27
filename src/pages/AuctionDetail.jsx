@@ -5,7 +5,7 @@ import { useAuth } from "../lib/auth";
 import Countdown, { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney, quickIncrements, totalWithCommission } from "../components/AuctionCard";
 import { waLink, waWinnerMessage, waGeneralMessage } from "../lib/whatsapp";
-import { logActivity } from "../lib/activity";
+import { trackConversion } from "../lib/activity";
 import { Flame, Clock, Trophy, ShieldCheck, Users } from "lucide-react";
 
 export default function AuctionDetail() {
@@ -86,7 +86,7 @@ export default function AuctionDetail() {
     const { error } = await supabase.rpc("place_bid", { p_auction_id: id, p_amount: amt });
     setBusy(false);
     if (error) return setError(error.message.replace("La puja debe ser de al menos", "Tu puja debe ser de al menos"));
-    logActivity(user.id, "click", location.pathname, `pujar:${auction.display_id || auction.id}`);
+    trackConversion(user.id, "pujar", location.pathname, { auction_id: auction.id, amount: amt });
     setAmount("");
     setOk("¡Puja registrada! Vas subiendo en el tablero 🔥");
   }

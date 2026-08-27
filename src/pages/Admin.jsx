@@ -667,15 +667,23 @@ function describePath(path) {
   return path;
 }
 
-// Vuelve legible el "label" que guarda cada clic — ej. "pujar:AB12" -> "Pujó en AB12".
+// Vuelve legible el "label" que guarda cada evento — ej. "ver_subasta:AB12" -> "Abrió la subasta AB12".
 function describeEvent(row) {
   if (row.event_type === "page_view") return `Visitó: ${describePath(row.path)}`;
   const [kind, ref] = (row.label || "").split(":");
-  if (kind === "pujar") return `Pujó en la subasta ${ref}`;
+  if (kind === "registro") return "🎯 Se registró";
+  if (kind === "pujar") return "🎯 Pujó en una subasta";
+  if (kind === "inscripcion_rematazo") return "🎯 Se inscribió a un rematazo";
   if (kind === "ver_subasta") return `Abrió la subasta ${ref}`;
-  if (kind === "inscribirse_rematazo") return "Se inscribió a un rematazo";
   if (kind === "whatsapp_flotante") return "Escribió por WhatsApp";
   return row.label || describePath(row.path);
+}
+
+// Clave para agrupar "quién es" — un usuario logueado se agrupa por su
+// cuenta; un visitante sin cuenta se agrupa por su navegador (visitor_id),
+// para no mezclar a distintas personas anónimas entre sí.
+function actorKey(row) {
+  return row.user_id || `anon:${row.visitor_id || "?"}`;
 }
 
 function ActivityPanel() {
@@ -688,9 +696,9 @@ function ActivityPanel() {
     setLoading(true);
     const { data } = await supabase
       .from("user_activity").select("*")
-      .order("created_at", { ascending: false }).limit(500);
+      .order("created_at", { ascending: false }).limit(800);
     setRows(data || []);
-    const userIds = [...new Set((data || []).map((r) => r.user_id))];
+    const userIds = [...new Set((data || []).map((r) => r.user_id).filter(Boolean))];
     if (userIds.length) {
       const { data: profs } = await supabase.from("profiles").select("id, full_name").in("id", userIds);
       const map = {};
@@ -702,29 +710,55 @@ function ActivityPanel() {
 
   useEffect(() => { load(); }, [load]);
 
-  const nameOf = (id) => profilesById[id] || "Usuario";
+  const nameOf = (row) => {
+    if (row.user_id) return profilesById[row.user_id] || "Usuario";
+    return `Visitante anónimo (${(row.visitor_id || "????").slice(-4)})`;
+  };
 
-  const filtered = rows.filter((r) => !query.trim() || nameOf(r.user_id).toLowerCase().includes(query.toLowerCase()));
+  const filtered = rows.filter((r) => !query.trim() || nameOf(r).toLowerCase().includes(query.toLowerCase()));
 
-  // Ranking de usuarios más activos (por cantidad de movimientos registrados)
-  const byUser = {};
-  rows.forEach((r) => { byUser[r.user_id] = (byUser[r.user_id] || 0) + 1; });
-  const topUsers = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  // Ranking de personas más activas (usuarios y visitantes anónimos por separado)
+  const byActor = {};
+  rows.forEach((r) => {
+    const key = actorKey(r);
+    if (!byActor[key]) byActor[key] = { count: 0, sample: r };
+    byActor[key].count++;
+  });
+  const topActors = Object.values(byActor).sort((a, b) => b.count - a.count).slice(0, 8);
 
   // Páginas más vistas
   const byPath = {};
   rows.filter((r) => r.event_type === "page_view").forEach((r) => { byPath[r.path] = (byPath[r.path] || 0) + 1; });
   const topPaths = Object.entries(byPath).sort((a, b) => b[1] - a[1]).slice(0, 8);
 
+  // De dónde vienen (Facebook, WhatsApp, directo, campaña...) — contado por
+  // sesión (una visita), no por evento, para no inflar el número con gente
+  // que solo vio muchas páginas en la misma visita.
+  const sessionsBySource = {};
+  const seenSessions = new Set();
+  rows.forEach((r) => {
+    if (!r.session_id || seenSessions.has(r.session_id)) return;
+    seenSessions.add(r.session_id);
+    const src = r.utm_campaign ? `${r.utm_source} · ${r.utm_campaign}` : (r.utm_source || "directo");
+    sessionsBySource[src] = (sessionsBySource[src] || 0) + 1;
+  });
+  const topSources = Object.entries(sessionsBySource).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  const uniqueVisitors = new Set(rows.map((r) => r.visitor_id).filter(Boolean)).size;
+  const registeredActors = new Set(rows.filter((r) => r.user_id).map((r) => r.user_id)).size;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ fontSize: 12, opacity: 0.6 }}>
+        {uniqueVisitors} navegadores distintos vistos (últimos 800 movimientos) · {registeredActors} con cuenta creada
+      </div>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <div className="card" style={{ flex: "1 1 260px" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Usuarios más activos</div>
-          {topUsers.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
-          {topUsers.map(([id, count]) => (
-            <div key={id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
-              <span>{nameOf(id)}</span>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Más activos</div>
+          {topActors.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
+          {topActors.map(({ sample, count }) => (
+            <div key={actorKey(sample)} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
+              <span>{sample.user_id ? "👤" : "🕵️"} {nameOf(sample)}</span>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
             </div>
           ))}
@@ -735,6 +769,16 @@ function ActivityPanel() {
           {topPaths.map(([path, count]) => (
             <div key={path} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
               <span>{describePath(path)}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        <div className="card" style={{ flex: "1 1 260px" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>De dónde llegan (por visita)</div>
+          {topSources.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
+          {topSources.map(([src, count]) => (
+            <div key={src} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
+              <span>{src}</span>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
             </div>
           ))}
@@ -759,10 +803,11 @@ function ActivityPanel() {
                 borderRadius: 10, background: "var(--crema-suave)", fontSize: 12.5,
               }}>
                 <div>
-                  <span style={{ fontWeight: 700 }}>{nameOf(r.user_id)}</span> — {describeEvent(r)}
+                  <span style={{ fontWeight: 700 }}>{r.user_id ? "👤" : "🕵️"} {nameOf(r)}</span> — {describeEvent(r)}
                 </div>
-                <div style={{ opacity: 0.55, whiteSpace: "nowrap" }}>
-                  {new Date(r.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
+                <div style={{ opacity: 0.55, whiteSpace: "nowrap", textAlign: "right" }}>
+                  <div>{new Date(r.created_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}</div>
+                  <div style={{ fontSize: 10.5 }}>{r.utm_source || "directo"}</div>
                 </div>
               </div>
             ))}
