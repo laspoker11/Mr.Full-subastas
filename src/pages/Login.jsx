@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { supabase } from "../supabaseClient";
+
+function isUnconfirmedEmailError(error) {
+  return error.code === "email_not_confirmed" || /email not confirmed/i.test(error.message || "");
+}
 
 export default function Login() {
   const { login } = useAuth();
@@ -8,17 +13,31 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resendStatus, setResendStatus] = useState("idle"); // "idle" | "sending" | "sent" | "error"
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setError(""); setLoading(true);
+    setError(""); setUnconfirmed(false); setResendStatus("idle"); setLoading(true);
     const { error } = await login(email.trim(), password);
     setLoading(false);
-    if (error) return setError(error.message === "Invalid login credentials"
-      ? "Correo o contraseña incorrectos."
-      : error.message);
+    if (error) {
+      if (isUnconfirmedEmailError(error)) {
+        setUnconfirmed(true);
+        return setError("Todavía no has confirmado tu correo. Revisa tu bandeja de entrada (y la de spam) o reenvía el correo abajo.");
+      }
+      return setError(error.message === "Invalid login credentials"
+        ? "Correo o contraseña incorrectos."
+        : error.message);
+    }
     nav("/");
+  }
+
+  async function resendConfirmation() {
+    setResendStatus("sending");
+    const { error } = await supabase.auth.resend({ type: "signup", email: email.trim() });
+    setResendStatus(error ? "error" : "sent");
   }
 
   return (
@@ -33,6 +52,22 @@ export default function Login() {
         <input className="input" type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} required />
         <button className="btn-primary" disabled={loading} type="submit">{loading ? "Entrando..." : "Entrar"}</button>
         {error && <div className="error-text">{error}</div>}
+        {unconfirmed && (
+          <div style={{ textAlign: "center" }}>
+            {resendStatus === "sent" ? (
+              <div style={{ fontSize: 12.5, color: "var(--ladrillo)", fontWeight: 700 }}>
+                📩 Listo, te reenviamos el correo. Puede tardar unos minutos.
+              </div>
+            ) : (
+              <button
+                type="button" onClick={resendConfirmation} disabled={resendStatus === "sending"}
+                className="btn-ghost" style={{ fontSize: 12.5 }}
+              >
+                {resendStatus === "sending" ? "Reenviando..." : resendStatus === "error" ? "No se pudo reenviar, intenta de nuevo" : "Reenviar correo de confirmación"}
+              </button>
+            )}
+          </div>
+        )}
       </form>
 
       <div style={{ textAlign: "center", fontSize: 13, marginTop: 14 }}>
