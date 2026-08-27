@@ -32,7 +32,7 @@ export default function AuctionCard({ auction, topAmount }) {
     <Link
       to={`/subasta/${auction.id}`}
       style={{ textDecoration: "none", color: "inherit" }}
-      onClick={() => logActivity(user?.id, "click", location.pathname, `ver_subasta:${auction.display_id || auction.id}`)}
+      onClick={() => logActivity(user?.id, "click", location.pathname, `ver_subasta:${auction.title}`)}
     >
       <div className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
         <div style={{

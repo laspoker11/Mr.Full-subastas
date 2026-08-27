@@ -667,14 +667,23 @@ function describePath(path) {
   return path;
 }
 
-// Vuelve legible el "label" que guarda cada evento — ej. "ver_subasta:AB12" -> "Abrió la subasta AB12".
+// Separa el "label" que guarda cada evento en tipo + referencia, cortando
+// solo en los primeros ":" — así un nombre de producto que traiga ":" no
+// rompe el corte (ej. "ver_subasta:Salchipapa: doble carne").
+function splitLabel(label) {
+  const i = (label || "").indexOf(":");
+  return i === -1 ? [label || "", ""] : [label.slice(0, i), label.slice(i + 1)];
+}
+
+// Vuelve legible el "label" que guarda cada evento — ej.
+// "ver_subasta:Salchipapa 5 carnes" -> "Abrió la subasta Salchipapa 5 carnes".
 function describeEvent(row) {
   if (row.event_type === "page_view") return `Visitó: ${describePath(row.path)}`;
-  const [kind, ref] = (row.label || "").split(":");
+  const [kind, ref] = splitLabel(row.label);
   if (kind === "registro") return "🎯 Se registró";
   if (kind === "pujar") return "🎯 Pujó en una subasta";
   if (kind === "inscripcion_rematazo") return "🎯 Se inscribió a un rematazo";
-  if (kind === "ver_subasta") return `Abrió la subasta ${ref}`;
+  if (kind === "ver_subasta") return `Abrió la subasta "${ref}"`;
   if (kind === "whatsapp_flotante") return "Escribió por WhatsApp";
   return row.label || describePath(row.path);
 }
@@ -779,6 +788,16 @@ function ActivityPanel() {
   const byPath = {};
   rows.filter((r) => r.event_type === "page_view").forEach((r) => { byPath[r.path] = (byPath[r.path] || 0) + 1; });
   const topPaths = Object.entries(byPath).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  // Productos (subastas) más abiertos — para saber qué se mira más, no solo
+  // qué páginas se visitan.
+  const byAuctionTitle = {};
+  rows.forEach((r) => {
+    const [kind, ref] = splitLabel(r.label);
+    if (kind !== "ver_subasta" || !ref) return;
+    byAuctionTitle[ref] = (byAuctionTitle[ref] || 0) + 1;
+  });
+  const topAuctionsSeen = Object.entries(byAuctionTitle).sort((a, b) => b[1] - a[1]).slice(0, 8);
 
   // De dónde vienen (Facebook, WhatsApp, directo, campaña...) — contado por
   // sesión (una visita), no por evento, para no inflar el número con gente
@@ -885,6 +904,16 @@ function ActivityPanel() {
             <div key={path} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0" }}>
               <span>{describePath(path)}</span>
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        <div className="card" style={{ flex: "1 1 260px" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Productos más abiertos</div>
+          {topAuctionsSeen.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Sin datos todavía.</div>}
+          {topAuctionsSeen.map(([title, count]) => (
+            <div key={title} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0", gap: 8 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, opacity: 0.7, flexShrink: 0 }}>{count}</span>
             </div>
           ))}
         </div>
