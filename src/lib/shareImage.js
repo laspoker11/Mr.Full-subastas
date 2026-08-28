@@ -230,23 +230,23 @@ export async function generateStoryImage({
 // Intenta abrir el menú nativo de compartir del teléfono (donde se puede elegir
 // Instagram y subir a Historias); si el navegador no lo soporta, descarga la
 // imagen para que el usuario la suba manualmente.
-export async function shareOrDownloadImage(blob, { filename, title, text }) {
+export async function shareOrDownloadImage(blob, { filename, title, text, url }) {
   const file = new File([blob], filename, { type: "image/png" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title, text });
+      await navigator.share({ files: [file], title, text, url });
       return "shared";
     } catch (e) {
       if (e && e.name === "AbortError") return "cancelled";
     }
   }
-  const url = URL.createObjectURL(blob);
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
+  link.href = objectUrl;
   link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
   return "downloaded";
 }

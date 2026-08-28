@@ -20,10 +20,14 @@ export default function ShareStoryButton({
         kind, title, imageUrl, logoUrl: logo_url, startsAt, endsAt, priceLabel, priceValue, badgeLabel,
       });
       const filename = `${kind}-${(title || "mrfull").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}.png`;
+      // El link va pegado al texto (no solo en `url`) porque varios navegadores
+      // ignoran `url` cuando el share incluye archivos — así siempre queda visible.
+      const pageUrl = window.location.href;
       const result = await shareOrDownloadImage(blob, {
         filename,
         title: title || "MrFull",
-        text: `¡Mira esto en MrFull! ${title || ""}`,
+        text: `¡Mira esto en MrFull! ${title || ""}\n${pageUrl}`,
+        url: pageUrl,
       });
       if (result === "downloaded") {
         setMsg("Imagen descargada 📥 Ábrela y súbela a tu Historia de Instagram.");
