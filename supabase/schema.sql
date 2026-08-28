@@ -882,6 +882,11 @@ create table if not exists public.rematazo_signups (
   unique (rematazo_id, user_id)
 );
 
+-- Precio congelado al momento de inscribirse: si después el admin cambia el
+-- precio del rematazo, las ventas ya hechas no deben cambiar de valor en el
+-- reporte (mismo criterio que ya se usa con el % de comisión en subastas).
+alter table public.rematazo_signups add column if not exists price_paid integer;
+
 alter table public.rematazo_signups enable row level security;
 
 drop policy if exists "el propio inscrito o un admin puede ver la inscripcion" on public.rematazo_signups;
@@ -1006,8 +1011,8 @@ begin
   end if;
 
   begin
-    insert into public.rematazo_signups (rematazo_id, user_id, entrega_via, direccion)
-    values (p_rematazo_id, auth.uid(), p_entrega_via, case when p_entrega_via = 'domicilio' then trim(p_direccion) else '' end)
+    insert into public.rematazo_signups (rematazo_id, user_id, entrega_via, direccion, price_paid)
+    values (p_rematazo_id, auth.uid(), p_entrega_via, case when p_entrega_via = 'domicilio' then trim(p_direccion) else '' end, v_rematazo.price)
     returning id into v_signup_id;
   exception when unique_violation then
     raise exception 'Ya estás inscrito en este rematazo';

@@ -2211,12 +2211,15 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
 
   // Solo cuentan como venta las inscripciones activas de rematazos que
   // siguen en pie (si el admin canceló el rematazo completo, esas
-  // inscripciones ya no deberían sumar al total).
+  // inscripciones ya no deberían sumar al total). El precio de cada venta es
+  // el que se cobró al inscribirse (price_paid); si es una inscripción vieja
+  // de antes de que existiera esa columna, se usa el precio actual del rematazo.
   const sales = useMemo(
     () => signups
       .filter((s) => s.status !== "cancelado")
       .map((s) => ({ ...s, rematazo: rematazosById[s.rematazo_id] }))
-      .filter((s) => s.rematazo && s.rematazo.status !== "cancelado"),
+      .filter((s) => s.rematazo && s.rematazo.status !== "cancelado")
+      .map((s) => ({ ...s, precioVenta: s.price_paid ?? s.rematazo.price })),
     [signups, rematazosById]
   );
 
@@ -2227,7 +2230,7 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
       return (!rangeStart || t >= rangeStart) && t <= rangeEnd;
     });
 
-    const total = filtered.reduce((s, x) => s + x.rematazo.price, 0);
+    const total = filtered.reduce((s, x) => s + x.precioVenta, 0);
     const productIds = new Set(filtered.map((s) => s.rematazo_id));
     const buyerIds = new Set(filtered.map((s) => s.user_id));
     const avg = filtered.length ? Math.round(total / filtered.length) : 0;
@@ -2236,7 +2239,7 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
     filtered.forEach((s) => {
       if (!byProduct[s.rematazo_id]) byProduct[s.rematazo_id] = { id: s.rematazo_id, title: s.rematazo.title, unidades: 0, ingresos: 0 };
       byProduct[s.rematazo_id].unidades += 1;
-      byProduct[s.rematazo_id].ingresos += s.rematazo.price;
+      byProduct[s.rematazo_id].ingresos += s.precioVenta;
     });
     const productRowsSorted = Object.values(byProduct).sort((a, b) => b.ingresos - a.ingresos);
 
@@ -2244,7 +2247,7 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
     filtered.forEach((s) => {
       if (!byUser[s.user_id]) byUser[s.user_id] = { items: [], total: 0 };
       byUser[s.user_id].items.push(s);
-      byUser[s.user_id].total += s.rematazo.price;
+      byUser[s.user_id].total += s.precioVenta;
     });
     const userRowsSorted = Object.entries(byUser).map(([uid, v]) => ({ uid, ...v, u: profilesById[uid] })).sort((a, b) => b.total - a.total);
 
@@ -2359,7 +2362,7 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
                   {r.items.map((it) => (
                     <div key={it.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0" }}>
                       <span>{new Date(it.created_at).toLocaleDateString("es-CO", { dateStyle: "medium" })} · {it.rematazo.title}</span>
-                      <span style={{ fontFamily: "var(--font-mono)" }}>{fmtMoney(it.rematazo.price)}</span>
+                      <span style={{ fontFamily: "var(--font-mono)" }}>{fmtMoney(it.precioVenta)}</span>
                     </div>
                   ))}
                 </div>
