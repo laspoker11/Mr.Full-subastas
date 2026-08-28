@@ -4,6 +4,7 @@ import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import Countdown, { timeParts, useClockTick } from "../components/Countdown";
 import { fmtMoney, quickIncrements, totalWithCommission } from "../components/AuctionCard";
+import ShareStoryButton from "../components/ShareStoryButton";
 import { waLink, waWinnerMessage, waGeneralMessage } from "../lib/whatsapp";
 import { trackConversion } from "../lib/activity";
 import { Flame, Clock, Trophy, ShieldCheck, Users } from "lucide-react";
@@ -181,6 +182,19 @@ export default function AuctionDetail() {
           </div>
         )}
       </div>
+
+      {auction.status === "live" && !expired && (
+        <ShareStoryButton
+          kind="subasta"
+          title={auction.title}
+          imageUrl={auction.image_url}
+          startsAt={auction.starts_at}
+          endsAt={notStartedYet ? null : auction.ends_at}
+          priceLabel={topBid ? "Puja más alta" : "Precio inicial"}
+          priceValue={topBid ? topBid.amount : auction.start_price}
+          style={{ marginTop: 12 }}
+        />
+      )}
 
       {isWinner && (
         <div className="card" style={{ marginTop: 14, background: "var(--queso-claro)" }}>

@@ -4,6 +4,7 @@ import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import Countdown, { useClockTick } from "../components/Countdown";
 import { fmtMoney } from "../components/AuctionCard";
+import ShareStoryButton from "../components/ShareStoryButton";
 import { waLink, waRematazoMessage } from "../lib/whatsapp";
 import { logActivity, trackConversion } from "../lib/activity";
 import { Zap, Users } from "lucide-react";
@@ -229,6 +230,18 @@ function RematazoCard({ r, signup, formOpen, formState, setFormState, busy, erro
         <div style={{ fontSize: 12, opacity: 0.7, display: "flex", alignItems: "center", gap: 5 }}>
           <Users size={13} /> {r.cupos_usados} inscritos
         </div>
+      )}
+
+      {!ended && (
+        <ShareStoryButton
+          kind="rematazo"
+          title={r.title}
+          imageUrl={r.image_url}
+          startsAt={r.created_at}
+          endsAt={timeLimited ? r.ends_at : null}
+          priceLabel="Precio de rematazo"
+          priceValue={r.price}
+        />
       )}
 
       {signup ? (
