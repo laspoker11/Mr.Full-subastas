@@ -233,7 +233,7 @@ function AdminDashboard() {
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 14px 60px", display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 6, background: "var(--crema-suave)", padding: 4, borderRadius: 10 }}>
-          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["rematazos", "⚡ Rematazos"], ["inscritos-rematazos", "📋 Inscritos"], ["ventas-rematazos", "📊 Ventas rematazos"], ["reporte", "📊 Reporte"], ["actividad", "📈 Actividad"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
+          {[["subastas", "Subastas"], ["redimir", "📦 Por redimir"], ["rematazos", "⚡ Rematazos"], ["inscritos-rematazos", "📋 Inscritos"], ["ventas-rematazos", "📊 Ventas rematazos"], ["concurso", "🧠 Concurso"], ["reporte", "📊 Reporte"], ["actividad", "📈 Actividad"], ["usuarios", "Usuarios"], ["diseno", "🎨 Diseño"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
               fontWeight: 700, fontSize: 13, background: tab === id ? "var(--ladrillo)" : "transparent",
@@ -258,6 +258,8 @@ function AdminDashboard() {
         <RematazoSignupsPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} onChanged={load} />
       ) : tab === "ventas-rematazos" ? (
         <RematazoSalesPanel rematazos={rematazos} signups={rematazoSignups} profilesById={profilesById} />
+      ) : tab === "concurso" ? (
+        <ConcursoAdminPanel />
       ) : tab === "reporte" ? (
         <ReportPanel auctions={auctions} bidsByAuction={bidsByAuction} />
       ) : tab === "actividad" ? (
@@ -2370,6 +2372,290 @@ function RematazoSalesPanel({ rematazos, signups, profilesById }) {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+const CONCURSO_STATUS_LABELS = { draft: "Borrador", signups_open: "Inscripciones abiertas", in_progress: "En curso", closed: "Terminado", cancelled: "Cancelado" };
+const CONCURSO_ROUND_STATUS_LABELS = { scheduled: "Programada", open: "Abierta", closed: "Cerrada" };
+
+function ConcursoAdminPanel() {
+  const [subtab, setSubtab] = useState("preguntas"); // "preguntas" | "concursos"
+  const [questions, setQuestions] = useState([]);
+  const [contests, setContests] = useState([]);
+  const [rounds, setRounds] = useState([]);
+
+  const [importText, setImportText] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importResult, setImportResult] = useState("");
+
+  const [contestForm, setContestForm] = useState({ title: "", description: "" });
+  const [creatingContest, setCreatingContest] = useState(false);
+  const [contestError, setContestError] = useState("");
+
+  const [selectedContestId, setSelectedContestId] = useState("");
+  const [roundForm, setRoundForm] = useState({ scheduledStart: "", windowMinutes: 10, perQuestionSeconds: 10, advanceDelayMinutes: 5, prizeDescription: "" });
+  const [creatingRound, setCreatingRound] = useState(false);
+  const [roundError, setRoundError] = useState("");
+
+  const load = useCallback(async () => {
+    const { data: q } = await supabase.from("trivia_questions").select("*").order("created_at", { ascending: false }).limit(500);
+    setQuestions(q || []);
+    const { data: c } = await supabase.from("trivia_contests").select("*").order("created_at", { ascending: false });
+    setContests(c || []);
+    const { data: r } = await supabase.from("trivia_contest_rounds").select("*").order("round_number", { ascending: true });
+    setRounds(r || []);
+  }, []);
+
+  useEffect(() => {
+    load();
+    const channel = supabase
+      .channel("admin-concurso")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trivia_questions" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trivia_contests" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trivia_contest_rounds" }, load)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [load]);
+
+  async function importQuestions() {
+    setImportError("");
+    setImportResult("");
+    let rows;
+    try {
+      rows = JSON.parse(importText);
+      if (!Array.isArray(rows)) throw new Error("Debe ser una lista: empieza con [ y termina con ].");
+    } catch (err) {
+      return setImportError("El texto no es un JSON válido: " + err.message);
+    }
+    setImporting(true);
+    const { data, error } = await supabase.rpc("bulk_import_trivia_questions", { p_rows: rows });
+    setImporting(false);
+    if (error) return setImportError(error.message);
+    setImportResult(`Se importaron ${data} pregunta${data === 1 ? "" : "s"}, quedaron pendientes de revisión.`);
+    setImportText("");
+    load();
+  }
+
+  async function reviewQuestion(id, approve) {
+    const reason = approve ? null : (window.prompt("¿Por qué la rechazas? (opcional)") || "");
+    const { error } = await supabase.rpc("review_trivia_question", { p_question_id: id, p_approve: approve, p_reason: reason });
+    if (error) alert(error.message);
+    load();
+  }
+
+  async function createContest() {
+    setContestError("");
+    if (!contestForm.title.trim()) return setContestError("Ponle un nombre al concurso.");
+    setCreatingContest(true);
+    const { error } = await supabase.rpc("create_trivia_contest", {
+      p_title: contestForm.title.trim(), p_description: contestForm.description.trim(),
+    });
+    setCreatingContest(false);
+    if (error) return setContestError(error.message);
+    setContestForm({ title: "", description: "" });
+    load();
+  }
+
+  async function openSignups(id) {
+    const { error } = await supabase.rpc("open_trivia_signups", { p_contest_id: id });
+    if (error) alert(error.message);
+    load();
+  }
+
+  async function createRound() {
+    setRoundError("");
+    if (!selectedContestId) return setRoundError("Elige un concurso.");
+    if (!roundForm.scheduledStart) return setRoundError("Elige la fecha y hora de inicio.");
+    setCreatingRound(true);
+    const { error } = await supabase.rpc("create_trivia_round", {
+      p_contest_id: selectedContestId,
+      p_scheduled_start: new Date(roundForm.scheduledStart).toISOString(),
+      p_window_minutes: Number(roundForm.windowMinutes),
+      p_per_question_seconds: Number(roundForm.perQuestionSeconds),
+      p_advance_delay_minutes: Number(roundForm.advanceDelayMinutes),
+      p_prize_description: roundForm.prizeDescription.trim(),
+    });
+    setCreatingRound(false);
+    if (error) return setRoundError(error.message);
+    setRoundForm({ scheduledStart: "", windowMinutes: 10, perQuestionSeconds: 10, advanceDelayMinutes: 5, prizeDescription: "" });
+    load();
+  }
+
+  const pending = questions.filter((q) => q.status === "pending");
+  const approvedCount = questions.filter((q) => q.status === "approved").length;
+  const rejectedCount = questions.filter((q) => q.status === "rejected").length;
+  const selectedContest = contests.find((c) => c.id === selectedContestId);
+  const roundsOfSelected = rounds.filter((r) => r.contest_id === selectedContestId);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        {[["preguntas", "📝 Preguntas"], ["concursos", "🏆 Concursos y rondas"]].map(([id, label]) => (
+          <button
+            key={id} onClick={() => setSubtab(id)} className="pill"
+            style={{
+              border: "none", cursor: "pointer", fontSize: 12, padding: "6px 12px",
+              background: subtab === id ? "var(--ladrillo)" : "var(--crema-suave)",
+              color: subtab === id ? "white" : "var(--carbon)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {subtab === "preguntas" ? (
+        <>
+          <div className="card">
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
+              Importar preguntas en bloque
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
+              Pega aquí la lista de preguntas en formato JSON (así te la puede entregar la IA que uses para generarlas).
+              Quedan "pendientes" — no se usan en ningún duelo hasta que las apruebes abajo, una por una.
+            </div>
+            <textarea
+              className="input" rows={8}
+              placeholder='[{"question_text": "¿Capital de Colombia?", "option_a": "Medellín", "option_b": "Bogotá", "option_c": "Cali", "option_d": "Cartagena", "correct_option": "b", "category": "Geografía", "difficulty": "facil"}]'
+              value={importText} onChange={(e) => setImportText(e.target.value)}
+              style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, resize: "vertical", width: "100%" }}
+            />
+            {importError && <div style={{ color: "var(--alerta)", fontSize: 12.5, marginTop: 6 }}>{importError}</div>}
+            {importResult && <div style={{ color: "#2a8", fontSize: 12.5, marginTop: 6 }}>{importResult}</div>}
+            <button className="btn-primary" onClick={importQuestions} disabled={importing || !importText.trim()} style={{ marginTop: 8 }}>
+              {importing ? "Importando..." : "Importar"}
+            </button>
+          </div>
+
+          <div className="card">
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
+              Preguntas pendientes por revisar ({pending.length})
+            </div>
+            <div style={{ fontSize: 11.5, opacity: 0.6, marginBottom: 10 }}>
+              {approvedCount} aprobada{approvedCount === 1 ? "" : "s"} · {rejectedCount} rechazada{rejectedCount === 1 ? "" : "s"}
+            </div>
+            {pending.length === 0 ? (
+              <div style={{ fontSize: 12.5, opacity: 0.6 }}>No hay preguntas pendientes por revisar.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {pending.map((q) => (
+                  <div key={q.id} style={{ borderBottom: "1px solid var(--crema-suave)", paddingBottom: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>{q.question_text}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 12.5, marginBottom: 8 }}>
+                      {["a", "b", "c", "d"].map((k) => (
+                        <div key={k} style={{ fontWeight: q.correct_option === k ? 700 : 400, color: q.correct_option === k ? "#2a8" : "inherit" }}>
+                          {k.toUpperCase()}) {q[`option_${k}`]} {q.correct_option === k ? "✓" : ""}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="btn-primary" onClick={() => reviewQuestion(q.id, true)} style={{ fontSize: 12, padding: "4px 12px", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Check size={12} /> Aprobar
+                      </button>
+                      <button className="btn-ghost" onClick={() => reviewQuestion(q.id, false)} style={{ fontSize: 12, padding: "4px 12px", color: "var(--alerta)", display: "flex", alignItems: "center", gap: 4 }}>
+                        <X size={12} /> Rechazar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="card">
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
+              Crear concurso
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input className="input" placeholder="Nombre del concurso" value={contestForm.title} onChange={(e) => setContestForm({ ...contestForm, title: e.target.value })} />
+              <input className="input" placeholder="Descripción (opcional)" value={contestForm.description} onChange={(e) => setContestForm({ ...contestForm, description: e.target.value })} />
+              {contestError && <div style={{ color: "var(--alerta)", fontSize: 12.5 }}>{contestError}</div>}
+              <button className="btn-primary" onClick={createContest} disabled={creatingContest}>
+                {creatingContest ? "Creando..." : "Crear concurso (queda en borrador)"}
+              </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
+              Concursos
+            </div>
+            {contests.length === 0 ? (
+              <div style={{ fontSize: 12.5, opacity: 0.6 }}>Todavía no has creado ningún concurso.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {contests.map((c) => (
+                  <div
+                    key={c.id} className="card" onClick={() => setSelectedContestId(c.id)}
+                    style={{ background: selectedContestId === c.id ? "var(--crema-suave)" : undefined, cursor: "pointer" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13.5 }}>{c.title}</div>
+                        <div style={{ fontSize: 11.5, opacity: 0.6 }}>{CONCURSO_STATUS_LABELS[c.status] || c.status}</div>
+                      </div>
+                      {c.status === "draft" && (
+                        <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); openSignups(c.id); }} style={{ fontSize: 12, flexShrink: 0 }}>
+                          Abrir inscripciones
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {selectedContest && (
+            <div className="card">
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
+                Programar ronda — {selectedContest.title}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <label style={{ fontSize: 11.5, opacity: 0.7, display: "flex", flexDirection: "column", gap: 3 }}>
+                  Fecha y hora de inicio
+                  <input className="input" type="datetime-local" value={roundForm.scheduledStart} onChange={(e) => setRoundForm({ ...roundForm, scheduledStart: e.target.value })} />
+                </label>
+                <label style={{ fontSize: 11.5, opacity: 0.7, display: "flex", flexDirection: "column", gap: 3 }}>
+                  Duración de la ventana (minutos)
+                  <input className="input" type="number" min={1} value={roundForm.windowMinutes} onChange={(e) => setRoundForm({ ...roundForm, windowMinutes: e.target.value })} />
+                </label>
+                <label style={{ fontSize: 11.5, opacity: 0.7, display: "flex", flexDirection: "column", gap: 3 }}>
+                  Tiempo por pregunta (segundos)
+                  <input className="input" type="number" min={1} max={10} value={roundForm.perQuestionSeconds} onChange={(e) => setRoundForm({ ...roundForm, perQuestionSeconds: e.target.value })} />
+                </label>
+                <label style={{ fontSize: 11.5, opacity: 0.7, display: "flex", flexDirection: "column", gap: 3 }}>
+                  Minutos para que arranque sola la siguiente ronda
+                  <input className="input" type="number" min={0} value={roundForm.advanceDelayMinutes} onChange={(e) => setRoundForm({ ...roundForm, advanceDelayMinutes: e.target.value })} />
+                </label>
+                <input className="input" placeholder="Premio de esta ronda (opcional)" value={roundForm.prizeDescription} onChange={(e) => setRoundForm({ ...roundForm, prizeDescription: e.target.value })} />
+                {roundError && <div style={{ color: "var(--alerta)", fontSize: 12.5 }}>{roundError}</div>}
+                <button className="btn-primary" onClick={createRound} disabled={creatingRound}>
+                  {creatingRound ? "Programando..." : "Programar ronda"}
+                </button>
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Rondas de este concurso</div>
+                {roundsOfSelected.length === 0 ? (
+                  <div style={{ fontSize: 12.5, opacity: 0.6 }}>Todavía no hay rondas programadas.</div>
+                ) : (
+                  roundsOfSelected.map((r) => (
+                    <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0", borderBottom: "1px solid var(--crema-suave)" }}>
+                      <span>{r.round_name} — {new Date(r.scheduled_start).toLocaleString("es-CO")}</span>
+                      <span style={{ opacity: 0.6 }}>{CONCURSO_ROUND_STATUS_LABELS[r.status] || r.status}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

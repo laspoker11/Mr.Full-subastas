@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-route
 import { AuthProvider, useAuth } from "./lib/auth";
 import { SiteSettingsProvider } from "./lib/siteSettings";
 import { supabase } from "./supabaseClient";
-import { isRematazosDomain } from "./lib/domain";
+import { isRematazosDomain, isConcursoDomain, isApexDomain } from "./lib/domain";
 import { usePageViewTracking } from "./lib/activity";
 import NavBar from "./components/NavBar";
 import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
@@ -13,6 +13,8 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Cliente from "./pages/Cliente";
 import Rematazos from "./pages/Rematazos";
+import Concurso from "./pages/Concurso";
+import Hub from "./pages/Hub";
 import Ranking from "./pages/Ranking";
 import AuctionDetail from "./pages/AuctionDetail";
 import Admin from "./pages/Admin";
@@ -31,7 +33,7 @@ function Shell() {
   usePageViewTracking(user?.id);
 
   useEffect(() => {
-    document.title = isRematazosDomain ? "Rematazos MrFull" : "Subastas MrFull";
+    document.title = isApexDomain ? "MrFull" : isRematazosDomain ? "Rematazos MrFull" : isConcursoDomain ? "Concurso MrFull" : "Subastas MrFull";
   }, []);
 
   // Seguro: si el enlace de "recuperar contraseña" del correo aterriza en
@@ -55,11 +57,18 @@ function Shell() {
         <Route path="/registro" element={<Register />} />
         <Route path="/olvide-password" element={<ForgotPassword />} />
         <Route path="/restablecer-password" element={<ResetPassword />} />
-        {/* rematazos.mrfull.online sirve el mismo build que subastas.mrfull.online
-            (Cloudflare Pages), así que "/" muestra una sección u otra según el
-            dominio por el que entraste — calculado una sola vez, no en un efecto. */}
-        <Route path="/" element={isRematazosDomain ? <Navigate to="/rematazos" replace /> : <Cliente />} />
+        {/* Todos los subdominios (subastas/rematazos/concurso) y el dominio
+            principal (mrfull.online) sirven el mismo build de Cloudflare
+            Pages, así que "/" muestra una sección u otra según el dominio
+            por el que entraste — calculado una sola vez, no en un efecto. */}
+        <Route
+          path="/"
+          element={
+            isApexDomain ? <Hub /> : isRematazosDomain ? <Navigate to="/rematazos" replace /> : isConcursoDomain ? <Navigate to="/concurso" replace /> : <Cliente />
+          }
+        />
         <Route path="/rematazos" element={<Rematazos />} />
+        <Route path="/concurso" element={<Concurso />} />
         <Route path="/ranking" element={<Ranking />} />
         <Route path="/subasta/:id" element={<AuctionDetail />} />
         <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
