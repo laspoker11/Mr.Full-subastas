@@ -1394,12 +1394,16 @@ create table if not exists public.trivia_questions (
 
 alter table public.trivia_questions enable row level security;
 
--- A propósito NO hay ninguna política de SELECT aquí: ni "authenticated" ni
--- "anon" pueden leer esta tabla directamente desde el navegador, porque el
--- texto de la pregunta viene pegado con la respuesta correcta (correct_option).
--- Solo las funciones de más abajo (que corren como "security definer", es
--- decir, con permiso para saltarse esta regla) pueden leerla — y solo
--- get_my_duel_question() la entrega al jugador, siempre sin correct_option.
+-- A propósito NO hay política de SELECT para usuarios normales: ni
+-- "authenticated" ni "anon" pueden leer esta tabla directamente desde el
+-- navegador, porque el texto de la pregunta viene pegado con la respuesta
+-- correcta (correct_option). Los jugadores solo la reciben (sin
+-- correct_option) a través de get_my_duel_question(). El admin SÍ puede
+-- leerla directo, porque el panel de revisión de preguntas la necesita.
+drop policy if exists "solo los administradores pueden ver el banco de preguntas" on public.trivia_questions;
+create policy "solo los administradores pueden ver el banco de preguntas"
+  on public.trivia_questions for select
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
 
 -- 3) CONCURSOS -------------------------------------------------------
 create table if not exists public.trivia_contests (
