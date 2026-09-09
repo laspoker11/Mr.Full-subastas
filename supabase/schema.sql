@@ -1786,7 +1786,7 @@ $$;
 -- que se pide, se guarda "presented_at" para medir el tiempo real después.
 create or replace function public.get_my_duel_question(p_duel_id uuid, p_slot integer)
 returns table (
-  duel_question_id uuid, question_text text, option_a text, option_b text, option_c text, option_d text,
+  dq_id uuid, question_text text, option_a text, option_b text, option_c text, option_d text,
   seconds_limit integer, deadline timestamptz
 )
 language plpgsql security definer set search_path = public as $$
@@ -1815,8 +1815,8 @@ begin
   -- anterior (la haya respondido o no) sí puede pasar a esta
   if p_slot > 1 and p_slot <= 5 and not exists (
     select 1 from public.trivia_duel_answers a
-    join public.trivia_duel_questions dq on dq.id = a.duel_question_id
-    where dq.duel_id = p_duel_id and dq.slot = p_slot - 1 and a.user_id = auth.uid()
+    join public.trivia_duel_questions dqx on dqx.id = a.duel_question_id
+    where dqx.duel_id = p_duel_id and dqx.slot = p_slot - 1 and a.user_id = auth.uid()
       and (a.selected_option is not null or now() > a.presented_at + (v_round.per_question_seconds || ' seconds')::interval)
   ) then
     raise exception 'Todavía te queda tiempo en la pregunta anterior';

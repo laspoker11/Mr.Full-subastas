@@ -93,7 +93,7 @@ export default function ConcursoDuelo() {
     if (!question || answering) return;
     setAnswering(true);
     const { error } = await supabase.rpc("submit_trivia_answer", {
-      p_duel_question_id: question.duel_question_id, p_selected_option: opt,
+      p_duel_question_id: question.dq_id, p_selected_option: opt,
     });
     setAnswering(false);
     if (error) return setQuestionError(error.message);
@@ -114,7 +114,7 @@ export default function ConcursoDuelo() {
   const myCorrect = duel.player1_id === user.id ? duel.p1_correct_count : duel.p2_correct_count;
   const oppCorrect = duel.player1_id === user.id ? duel.p2_correct_count : duel.p1_correct_count;
   const iWon = duel.winner_id === user.id;
-  const currentAnswer = question && myAnswers.find((a) => a.duel_question_id === question.duel_question_id);
+  const currentAnswer = question && myAnswers.find((a) => a.duel_question_id === question.dq_id);
   const alreadyAnswered = currentAnswer && currentAnswer.selected_option !== null;
   const deadlineMs = question ? new Date(question.deadline).getTime() : null;
   const secondsLeft = deadlineMs ? Math.max(0, Math.ceil((deadlineMs - nowTick) / 1000)) : null;
