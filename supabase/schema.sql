@@ -1781,7 +1781,10 @@ $$;
 -- respuesta correcta), y solo si ya respondió la anterior. La primera vez
 -- que se pide, se guarda "presented_at" para medir el tiempo real después.
 create or replace function public.get_my_duel_question(p_duel_id uuid, p_slot integer)
-returns table (question_text text, option_a text, option_b text, option_c text, option_d text, seconds_limit integer, deadline timestamptz)
+returns table (
+  duel_question_id uuid, question_text text, option_a text, option_b text, option_c text, option_d text,
+  seconds_limit integer, deadline timestamptz
+)
 language plpgsql security definer set search_path = public as $$
 declare
   v_duel public.trivia_duels%rowtype;
@@ -1799,25 +1802,28 @@ begin
     raise exception 'Este duelo ya terminó';
   end if;
 
+  select * into v_round from public.trivia_contest_rounds where id = v_duel.round_id;
+
   select * into v_dq from public.trivia_duel_questions where duel_id = p_duel_id and slot = p_slot;
   if v_dq is null then raise exception 'Esa pregunta todavía no está disponible'; end if;
 
+  -- no dejar saltar preguntas, PERO si ya se le acabó el tiempo a la
+  -- anterior (la haya respondido o no) sí puede pasar a esta
   if p_slot > 1 and p_slot <= 5 and not exists (
     select 1 from public.trivia_duel_answers a
     join public.trivia_duel_questions dq on dq.id = a.duel_question_id
-    where dq.duel_id = p_duel_id and dq.slot = p_slot - 1 and a.user_id = auth.uid() and a.selected_option is not null
+    where dq.duel_id = p_duel_id and dq.slot = p_slot - 1 and a.user_id = auth.uid()
+      and (a.selected_option is not null or now() > a.presented_at + (v_round.per_question_seconds || ' seconds')::interval)
   ) then
-    raise exception 'Primero responde la pregunta anterior';
+    raise exception 'Todavía te queda tiempo en la pregunta anterior';
   end if;
-
-  select * into v_round from public.trivia_contest_rounds where id = v_duel.round_id;
 
   insert into public.trivia_duel_answers (duel_id, duel_question_id, user_id, presented_at)
   values (p_duel_id, v_dq.id, auth.uid(), now())
   on conflict (duel_question_id, user_id) do nothing;
 
   return query
-    select q.question_text, q.option_a, q.option_b, q.option_c, q.option_d,
+    select v_dq.id, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d,
            v_round.per_question_seconds,
            a.presented_at + (v_round.per_question_seconds || ' seconds')::interval
     from public.trivia_questions q

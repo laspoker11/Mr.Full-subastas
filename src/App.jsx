@@ -14,6 +14,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Cliente from "./pages/Cliente";
 import Rematazos from "./pages/Rematazos";
 import Concurso from "./pages/Concurso";
+import ConcursoDuelo from "./pages/ConcursoDuelo";
 import Hub from "./pages/Hub";
 import Ranking from "./pages/Ranking";
 import AuctionDetail from "./pages/AuctionDetail";
@@ -69,6 +70,7 @@ function Shell() {
         />
         <Route path="/rematazos" element={<Rematazos />} />
         <Route path="/concurso" element={<Concurso />} />
+        <Route path="/concurso/duelo/:id" element={<RequireAuth><ConcursoDuelo /></RequireAuth>} />
         <Route path="/ranking" element={<Ranking />} />
         <Route path="/subasta/:id" element={<AuctionDetail />} />
         <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />

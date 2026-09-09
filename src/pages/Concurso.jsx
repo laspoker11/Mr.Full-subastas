@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
 import { trackConversion } from "../lib/activity";
-import { Brain, Trophy } from "lucide-react";
+import { Brain, Trophy, Swords } from "lucide-react";
 
 const STATUS_LABELS = {
   draft: "Próximamente",
@@ -26,6 +26,17 @@ export default function Concurso() {
   const [errorById, setErrorById] = useState({});
   const [expandedId, setExpandedId] = useState(null);
   const [bracketByContest, setBracketByContest] = useState({});
+  const [activeDuel, setActiveDuel] = useState(null);
+
+  const loadActiveDuel = useCallback(async () => {
+    if (!user) return setActiveDuel(null);
+    const { data } = await supabase
+      .from("trivia_duels").select("*")
+      .or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`)
+      .in("status", ["pending", "tiebreak"])
+      .limit(1);
+    setActiveDuel((data && data[0]) || null);
+  }, [user]);
 
   const load = useCallback(async () => {
     const { data: c } = await supabase
@@ -57,6 +68,16 @@ export default function Concurso() {
   useEffect(() => {
     loadMySignups();
   }, [loadMySignups]);
+
+  useEffect(() => {
+    loadActiveDuel();
+    if (!user) return;
+    const channel = supabase
+      .channel(`concurso-mis-duelos-${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trivia_duels" }, loadActiveDuel)
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [user, loadActiveDuel]);
 
   async function signup(contest) {
     if (!user) return navigate("/login");
@@ -100,6 +121,25 @@ export default function Concurso() {
       <div style={{ fontSize: 13.5, opacity: 0.7, marginBottom: 18 }}>
         Torneo de cultura general con duelos 1 vs 1 de eliminación directa. Inscríbete y espera a que abra tu duelo.
       </div>
+
+      {activeDuel && (
+        <Link
+          to={`/concurso/duelo/${activeDuel.id}`}
+          className="card"
+          style={{
+            display: "flex", alignItems: "center", gap: 10, marginBottom: 16, textDecoration: "none", color: "white",
+            background: "var(--ladrillo)",
+          }}
+        >
+          <Swords size={20} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>
+              {activeDuel.status === "tiebreak" ? "¡Tu duelo está en desempate!" : "¡Tienes un duelo activo!"}
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.9 }}>Toca aquí para jugar ahora →</div>
+          </div>
+        </Link>
+      )}
 
       {contests.length === 0 ? (
         <div style={{ fontSize: 13, opacity: 0.6 }}>Todavía no hay ningún concurso abierto.</div>
