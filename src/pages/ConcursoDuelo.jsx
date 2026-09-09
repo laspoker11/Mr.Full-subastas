@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../lib/auth";
@@ -17,7 +17,9 @@ export default function ConcursoDuelo() {
   const [opponentName, setOpponentName] = useState("");
   const [myName, setMyName] = useState("");
   const [myAnswers, setMyAnswers] = useState([]);
+  const [loadingAnswers, setLoadingAnswers] = useState(true);
   const [slot, setSlot] = useState(null);
+  const mainInitedRef = useRef(false);
   const [question, setQuestion] = useState(null);
   const [questionError, setQuestionError] = useState("");
   const [answering, setAnswering] = useState(false);
@@ -38,6 +40,7 @@ export default function ConcursoDuelo() {
     if (!user) return;
     const { data } = await supabase.from("trivia_duel_answers").select("*").eq("duel_id", duelId).eq("user_id", user.id).order("presented_at", { ascending: true });
     setMyAnswers(data || []);
+    setLoadingAnswers(false);
   }, [duelId, user]);
 
   useEffect(() => {
@@ -64,16 +67,27 @@ export default function ConcursoDuelo() {
     });
   }, [duel, user]);
 
-  // decide qué slot toca según lo que ya respondió (o dejó pasar) el jugador
+  // Desempate: el servidor decide cuándo toca la siguiente pregunta extra
+  // (tiebreak_round sube solo) — reaccionamos a eso, siempre, sin importar
+  // si ya habíamos arrancado antes.
   useEffect(() => {
-    if (!duel || !user) return;
-    if (duel.status === "closed") return;
-    if (duel.player1_id !== user.id && duel.player2_id !== user.id) return;
+    if (!duel || duel.status !== "tiebreak") return;
+    setSlot(5 + duel.tiebreak_round);
+  }, [duel?.status, duel?.tiebreak_round]);
 
-    const answeredCount = myAnswers.filter((a) => a.selected_option !== null).length;
-    const nextSlot = duel.status === "tiebreak" ? 5 + duel.tiebreak_round : Math.min(answeredCount + 1, 5);
-    setSlot(nextSlot);
-  }, [duel, myAnswers, user]);
+  // Preguntas 1-5: al entrar (o volver a entrar) al duelo, retomamos donde
+  // íbamos, contando cuántas preguntas ya visitamos (las hayamos respondido
+  // o dejado pasar por tiempo). Esto se calcula UNA sola vez — después, cada
+  // respuesta o "siguiente pregunta" avanza el slot a mano (más abajo), para
+  // no depender de recontar cada vez que llega una respuesta nueva.
+  useEffect(() => {
+    if (mainInitedRef.current) return;
+    if (!duel || !user || loadingAnswers) return;
+    if (duel.status !== "pending") return;
+    if (duel.player1_id !== user.id && duel.player2_id !== user.id) return;
+    mainInitedRef.current = true;
+    setSlot(Math.min(myAnswers.length + 1, 5));
+  }, [duel, user, loadingAnswers, myAnswers]);
 
   useEffect(() => {
     if (!slot || !duel || duel.status === "closed") return;
@@ -87,7 +101,7 @@ export default function ConcursoDuelo() {
       setQuestion((data && data[0]) || null);
     })();
     return () => { cancelled = true; };
-  }, [slot, duelId, duel]);
+  }, [slot, duelId, duel?.status]);
 
   async function answer(opt) {
     if (!question || answering) return;
@@ -98,6 +112,11 @@ export default function ConcursoDuelo() {
     setAnswering(false);
     if (error) return setQuestionError(error.message);
     loadMyAnswers();
+    // en desempate el servidor decide cuándo toca la siguiente (arriba);
+    // en las 5 preguntas normales, avanzamos nosotros mismos
+    if (duel.status === "pending") {
+      setSlot((s) => Math.min((s || 1) + 1, 5));
+    }
   }
 
   function skipToNext() {
