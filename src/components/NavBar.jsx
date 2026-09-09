@@ -62,6 +62,9 @@ export default function NavBar() {
               ⚡ Rematazos
             </Link>
           )}
+          <Link to="/concurso" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
+            🧠 Concurso
+          </Link>
           {user && (
             <Link to="/ranking" style={{ textDecoration: "none", color: "var(--texto-sobre-oscuro)", fontSize: 13, fontWeight: 700 }}>
               🏆 Ranking
