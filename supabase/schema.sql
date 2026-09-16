@@ -1419,6 +1419,7 @@ create table if not exists public.trivia_contests (
   -- cancelled = Luis lo canceló a mano (reservado para más adelante)
   status text not null default 'draft' check (status in ('draft', 'signups_open', 'in_progress', 'closed', 'cancelled')),
   winner_user_id uuid references public.profiles(id),
+  hidden_public boolean not null default false,
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now()
 );
@@ -1699,6 +1700,25 @@ begin
   if v_status <> 'draft' then raise exception 'Este concurso ya no está en borrador'; end if;
 
   update public.trivia_contests set status = 'signups_open' where id = p_contest_id;
+end;
+$$;
+
+-- Quitar un concurso de la vista pública (solo admin) — igual que ya se
+-- puede hacer con subastas y rematazos. No se borra nada, solo deja de
+-- salir en /concurso para los clientes.
+create or replace function public.hide_trivia_contest_public(p_contest_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare v_is_admin boolean;
+begin
+  select is_admin into v_is_admin from public.profiles where id = auth.uid();
+  if not coalesce(v_is_admin, false) then raise exception 'Solo un administrador puede hacer esto'; end if;
+
+  if not exists (select 1 from public.trivia_contests where id = p_contest_id) then
+    raise exception 'Concurso no encontrado';
+  end if;
+
+  update public.trivia_contests set hidden_public = true where id = p_contest_id;
 end;
 $$;
 

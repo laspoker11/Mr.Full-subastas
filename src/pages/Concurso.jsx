@@ -5,14 +5,6 @@ import { useAuth } from "../lib/auth";
 import { trackConversion } from "../lib/activity";
 import { Brain, Trophy, Swords } from "lucide-react";
 
-const STATUS_LABELS = {
-  draft: "Próximamente",
-  signups_open: "Inscripciones abiertas",
-  in_progress: "En curso",
-  closed: "Terminado",
-  cancelled: "Cancelado",
-};
-
 const ROUND_STATUS_LABELS = { scheduled: "Programada", open: "Jugándose ahora", closed: "Cerrada" };
 
 export default function Concurso() {
@@ -27,6 +19,8 @@ export default function Concurso() {
   const [expandedId, setExpandedId] = useState(null);
   const [bracketByContest, setBracketByContest] = useState({});
   const [activeDuel, setActiveDuel] = useState(null);
+  const [winnerNameById, setWinnerNameById] = useState({});
+  const [finalPrizeByContest, setFinalPrizeByContest] = useState({});
 
   const loadActiveDuel = useCallback(async () => {
     if (!user) return setActiveDuel(null);
@@ -41,11 +35,35 @@ export default function Concurso() {
   const load = useCallback(async () => {
     const { data: c } = await supabase
       .from("trivia_contests").select("*")
-      .neq("status", "draft")
+      .in("status", ["signups_open", "in_progress", "closed"])
+      .eq("hidden_public", false)
       .order("created_at", { ascending: false })
       .limit(30);
-    setContests(c || []);
+    const list = c || [];
+    // el/los que todavía están en juego van de primeros, los terminados abajo
+    list.sort((a, b) => (a.status === "closed") - (b.status === "closed") || new Date(b.created_at) - new Date(a.created_at));
+    setContests(list);
     setLoading(false);
+
+    const closedWithWinner = list.filter((x) => x.status === "closed" && x.winner_user_id);
+    if (closedWithWinner.length) {
+      const winnerIds = [...new Set(closedWithWinner.map((x) => x.winner_user_id))];
+      const { data: profiles } = await supabase.from("profiles").select("id, full_name").in("id", winnerIds);
+      const nameById = {};
+      (profiles || []).forEach((p) => (nameById[p.id] = p.full_name || "Jugador"));
+      setWinnerNameById(nameById);
+
+      const { data: rounds } = await supabase
+        .from("trivia_contest_rounds").select("contest_id, round_number, prize_description")
+        .in("contest_id", closedWithWinner.map((x) => x.id));
+      const prizeByContest = {};
+      (rounds || []).forEach((r) => {
+        if (!prizeByContest[r.contest_id] || r.round_number > prizeByContest[r.contest_id].round_number) {
+          prizeByContest[r.contest_id] = r;
+        }
+      });
+      setFinalPrizeByContest(prizeByContest);
+    }
   }, []);
 
   const loadMySignups = useCallback(async () => {
@@ -148,13 +166,29 @@ export default function Concurso() {
           {contests.map((c) => {
             const signup_ = mySignups[c.id];
             const bracket = bracketByContest[c.id];
+            const isFinished = c.status === "closed";
+            const winnerName = isFinished && c.winner_user_id ? winnerNameById[c.winner_user_id] : null;
+            const prize = isFinished ? finalPrizeByContest[c.id]?.prize_description : null;
             return (
-              <div key={c.id} className="card">
+              <div
+                key={c.id} className="card"
+                style={{
+                  border: isFinished ? "1px solid var(--crema-suave)" : "2px solid var(--ladrillo)",
+                  background: isFinished ? "var(--crema-suave)" : "white",
+                }}
+              >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                   <div>
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>{c.title}</div>
                     {c.description && <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2 }}>{c.description}</div>}
-                    <div style={{ fontSize: 11.5, opacity: 0.6, marginTop: 4 }}>{STATUS_LABELS[c.status] || c.status}</div>
+                    <div style={{ marginTop: 6 }}>
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 800, padding: "3px 10px", borderRadius: 20, letterSpacing: 0.3,
+                        background: isFinished ? "#999" : "var(--ladrillo)", color: "white",
+                      }}>
+                        {isFinished ? "FINALIZADO" : c.status === "signups_open" ? "INSCRIPCIONES ABIERTAS" : "EN CURSO"}
+                      </span>
+                    </div>
                   </div>
                   {c.status === "signups_open" && !signup_ && (
                     <button className="btn-primary" onClick={() => signup(c)} disabled={busyId === c.id} style={{ flexShrink: 0, fontSize: 12.5 }}>
@@ -171,6 +205,15 @@ export default function Concurso() {
                     </div>
                   )}
                 </div>
+
+                {isFinished && (
+                  <div style={{ marginTop: 10, fontSize: 13.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Trophy size={16} color="var(--ladrillo)" />
+                    {winnerName ? `Ganó: ${winnerName}` : "Nadie se coronó campeón"}
+                    {prize && <span style={{ fontWeight: 500, opacity: 0.8 }}> · 🎁 {prize}</span>}
+                  </div>
+                )}
+
                 {errorById[c.id] && <div style={{ color: "var(--alerta)", fontSize: 12, marginTop: 6 }}>{errorById[c.id]}</div>}
 
                 {c.status !== "signups_open" && (
@@ -208,11 +251,6 @@ export default function Concurso() {
                           </div>
                         </div>
                       ))
-                    )}
-                    {c.status === "closed" && c.winner_user_id && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 13 }}>
-                        <Trophy size={16} color="var(--ladrillo)" /> Campeón: {bracket.nameById[c.winner_user_id] || "..."}
-                      </div>
                     )}
                   </div>
                 )}

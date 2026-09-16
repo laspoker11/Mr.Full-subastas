@@ -2465,6 +2465,14 @@ function ConcursoAdminPanel() {
     load();
   }
 
+  function hideFromPublic(id) {
+    if (!confirm("¿Quitar este concurso de la vista pública? Los clientes ya no lo van a ver en /concurso — tú lo sigues viendo aquí.")) return;
+    supabase.rpc("hide_trivia_contest_public", { p_contest_id: id }).then(({ error }) => {
+      if (error) alert(error.message);
+      load();
+    });
+  }
+
   async function createRound() {
     setRoundError("");
     if (!selectedContestId) return setRoundError("Elige un concurso.");
@@ -2597,13 +2605,23 @@ function ConcursoAdminPanel() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                       <div>
                         <div style={{ fontWeight: 700, fontSize: 13.5 }}>{c.title}</div>
-                        <div style={{ fontSize: 11.5, opacity: 0.6 }}>{CONCURSO_STATUS_LABELS[c.status] || c.status}</div>
+                        <div style={{ fontSize: 11.5, opacity: 0.6 }}>
+                          {CONCURSO_STATUS_LABELS[c.status] || c.status}
+                          {c.hidden_public ? " · oculto del público" : ""}
+                        </div>
                       </div>
-                      {c.status === "draft" && (
-                        <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); openSignups(c.id); }} style={{ fontSize: 12, flexShrink: 0 }}>
-                          Abrir inscripciones
-                        </button>
-                      )}
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        {c.status === "draft" && (
+                          <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); openSignups(c.id); }} style={{ fontSize: 12 }}>
+                            Abrir inscripciones
+                          </button>
+                        )}
+                        {!c.hidden_public && (
+                          <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); hideFromPublic(c.id); }} style={{ fontSize: 12, color: "var(--alerta)" }}>
+                            Ocultar del público
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
