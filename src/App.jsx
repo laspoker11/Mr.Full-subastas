@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-route
 import { AuthProvider, useAuth } from "./lib/auth";
 import { SiteSettingsProvider } from "./lib/siteSettings";
 import { supabase } from "./supabaseClient";
-import { isRematazosDomain, isConcursoDomain, isApexDomain } from "./lib/domain";
+import { isRematazosDomain, isConcursoDomain, isApexDomain, tomarVolver } from "./lib/domain";
 import { usePageViewTracking } from "./lib/activity";
 import NavBar from "./components/NavBar";
 import WhatsAppFloatingButton from "./components/WhatsAppFloatingButton";
@@ -32,6 +32,14 @@ function Shell() {
   const navigate = useNavigate();
   const { user } = useAuth();
   usePageViewTracking(user?.id);
+
+  // Si llegó a iniciar sesión desde otra app (p. ej. pedidos.mrfull.online), apenas tenga
+  // la sesión abierta —por el login, el registro o el enlace del correo— lo devolvemos allá.
+  useEffect(() => {
+    if (!user || window.location.pathname.startsWith("/restablecer-password")) return;
+    const destino = tomarVolver();
+    if (destino) window.location.replace(destino);
+  }, [user]);
 
   useEffect(() => {
     document.title = isApexDomain ? "MrFull" : isRematazosDomain ? "Rematazos MrFull" : isConcursoDomain ? "Concurso MrFull" : "Subastas MrFull";

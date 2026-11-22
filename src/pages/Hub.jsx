@@ -1,8 +1,14 @@
 import { useSiteSettings } from "../lib/siteSettings";
-import { SUBASTAS_HOSTNAME, REMATAZOS_HOSTNAME, CONCURSO_HOSTNAME } from "../lib/domain";
-import { Gavel, Zap, Brain } from "lucide-react";
+import { SUBASTAS_HOSTNAME, REMATAZOS_HOSTNAME, CONCURSO_HOSTNAME, PEDIDOS_HOSTNAME } from "../lib/domain";
+import { Gavel, Zap, Brain, UtensilsCrossed } from "lucide-react";
 
 const SECTIONS = [
+  {
+    hostname: PEDIDOS_HOSTNAME,
+    icon: UtensilsCrossed,
+    title: "Pedidos",
+    description: "Pide salchipapas, hamburguesas y perros por voz o tocando el menú: a domicilio, para llevar o a la mesa.",
+  },
   {
     hostname: SUBASTAS_HOSTNAME,
     icon: Gavel,

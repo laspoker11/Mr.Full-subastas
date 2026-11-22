@@ -4,6 +4,34 @@
 export const REMATAZOS_HOSTNAME = "rematazos.mrfull.online";
 export const SUBASTAS_HOSTNAME = "subastas.mrfull.online";
 export const CONCURSO_HOSTNAME = "concurso.mrfull.online";
+// La app de pedidos (otro proyecto: Cloudflare Worker "mrfull-fudo-puente"), con el mismo login.
+export const PEDIDOS_HOSTNAME = "pedidos.mrfull.online";
+
+/*
+ * "Volver después de iniciar sesión": cuando alguien llega al login desde otra app de
+ * *.mrfull.online (p. ej. pedidos), se guarda a dónde volver en una cookie compartida.
+ * Así, apenas tenga la sesión abierta — por el login, el registro, el enlace del correo
+ * de confirmación o cualquier otra página — se le devuelve allá. Dura 30 minutos.
+ */
+const COOKIE_VOLVER = "mrfull-volver";
+export function destinoValido(v) {
+  try {
+    const u = new URL(v);
+    return u.protocol === "https:" && (u.hostname === "mrfull.online" || u.hostname.endsWith(".mrfull.online")) ? u.href : null;
+  } catch { return null; }
+}
+const dominioCookie = () => (window.location.hostname.endsWith("mrfull.online") ? "; Domain=.mrfull.online" : "");
+export function recordarVolver(v) {
+  const d = destinoValido(v);
+  if (d) document.cookie = `${COOKIE_VOLVER}=${encodeURIComponent(d)}${dominioCookie()}; Path=/; Max-Age=1800; SameSite=Lax; Secure`;
+}
+export function tomarVolver() {
+  const m = document.cookie.match(/(?:^|; )mrfull-volver=([^;]*)/);
+  if (!m) return null;
+  document.cookie = `${COOKIE_VOLVER}=${dominioCookie()}; Path=/; Max-Age=0; SameSite=Lax; Secure`;
+  const d = destinoValido(decodeURIComponent(m[1]));
+  return d && new URL(d).hostname !== window.location.hostname ? d : null;
+}
 
 export const isRematazosDomain =
   typeof window !== "undefined" && window.location.hostname === REMATAZOS_HOSTNAME;

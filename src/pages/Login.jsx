@@ -2,16 +2,17 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../supabaseClient";
+import { destinoValido, recordarVolver } from "../lib/domain";
 
 // ?volver=https://pedidos.mrfull.online/... → después de entrar, regresa a esa página
 // (solo se aceptan direcciones de mrfull.online, para que nadie use el login para redirigir a otro sitio).
+// Además queda guardado en una cookie compartida (ver lib/domain.js), para que funcione
+// también si el cliente se registra o confirma el correo en vez de entrar aquí mismo.
 function destinoVolver() {
-  try {
-    const v = new URLSearchParams(window.location.search).get("volver");
-    if (!v) return null;
-    const u = new URL(v);
-    return u.protocol === "https:" && (u.hostname === "mrfull.online" || u.hostname.endsWith(".mrfull.online")) ? u.href : null;
-  } catch { return null; }
+  const v = new URLSearchParams(window.location.search).get("volver");
+  const d = v ? destinoValido(v) : null;
+  if (d) recordarVolver(d);
+  return d;
 }
 
 function isUnconfirmedEmailError(error) {
