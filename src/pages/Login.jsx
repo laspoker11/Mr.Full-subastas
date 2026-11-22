@@ -58,9 +58,13 @@ export default function Login() {
   return (
     <div style={{ maxWidth: 360, margin: "60px auto", padding: "0 16px" }}>
       <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 26, textAlign: "center", marginBottom: 4 }}>
-        🔥 Subastas MrFull
+        🍟 Cuenta Mr. Full
       </div>
-      <div style={{ textAlign: "center", fontSize: 13, opacity: 0.6, marginBottom: 20 }}>Inicia sesión para pujar</div>
+      <div style={{ textAlign: "center", fontSize: 13, opacity: 0.6, marginBottom: 20 }}>
+        {volver && /^https:\/\/pedidos\./.test(volver)
+          ? "Entra para pedir más rápido: tus datos se llenan solos."
+          : "Una sola cuenta para pedidos, subastas, rematazos y concurso."}
+      </div>
 
       <form onSubmit={handleSubmit} className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <input className="input" type="email" placeholder="Correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -86,7 +90,7 @@ export default function Login() {
       </form>
 
       <div style={{ textAlign: "center", fontSize: 13, marginTop: 14 }}>
-        ¿No tienes cuenta? <Link to="/registro" style={{ color: "var(--ladrillo)", fontWeight: 700 }}>Regístrate aquí</Link>
+        ¿No tienes cuenta? <Link to={"/registro" + window.location.search} style={{ color: "var(--ladrillo)", fontWeight: 700 }}>Regístrate aquí</Link>
       </div>
       <div style={{ textAlign: "center", fontSize: 12.5, marginTop: 8 }}>
         <Link to="/olvide-password" style={{ color: "var(--carbon)", opacity: 0.6 }}>¿Olvidaste tu contraseña?</Link>

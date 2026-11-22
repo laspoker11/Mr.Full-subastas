@@ -39,7 +39,7 @@ export default function ForgotPassword() {
   return (
     <div style={{ maxWidth: 360, margin: "60px auto", padding: "0 16px" }}>
       <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 26, textAlign: "center", marginBottom: 4 }}>
-        🔥 Subastas MrFull
+        🍟 Cuenta Mr. Full
       </div>
       <div style={{ textAlign: "center", fontSize: 13, opacity: 0.6, marginBottom: 20 }}>
         Escribe tu correo y te enviamos un enlace para restablecer tu contraseña
