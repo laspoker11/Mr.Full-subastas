@@ -1,15 +1,29 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { supabase } from "../supabaseClient";
+
+// ?volver=https://pedidos.mrfull.online/... → después de entrar, regresa a esa página
+// (solo se aceptan direcciones de mrfull.online, para que nadie use el login para redirigir a otro sitio).
+function destinoVolver() {
+  try {
+    const v = new URLSearchParams(window.location.search).get("volver");
+    if (!v) return null;
+    const u = new URL(v);
+    return u.protocol === "https:" && (u.hostname === "mrfull.online" || u.hostname.endsWith(".mrfull.online")) ? u.href : null;
+  } catch { return null; }
+}
 
 function isUnconfirmedEmailError(error) {
   return error.code === "email_not_confirmed" || /email not confirmed/i.test(error.message || "");
 }
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const nav = useNavigate();
+  const volver = destinoVolver();
+  // si ya tiene la sesión abierta y viene de otra app (p. ej. pedidos), lo devolvemos de una
+  useEffect(() => { if (user && volver) window.location.replace(volver); }, [user, volver]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -31,6 +45,7 @@ export default function Login() {
         ? "Correo o contraseña incorrectos."
         : error.message);
     }
+    if (volver) return window.location.replace(volver);
     nav("/");
   }
 
